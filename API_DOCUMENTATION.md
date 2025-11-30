@@ -4,14 +4,18 @@
 
 **Server Status:** Running on Port 9191
 
+**Data Source:** Live Excel files (data fetched on each API request)
+
 ---
 
 ## 🔗 Table of Contents
 1. [Health Check API](#1-health-check-api)
-2. [Remittance History API](#2-remittance-history-api)
-3. [Transactions History API](#3-transactions-history-api)
-4. [Rewards History API](#4-rewards-history-api)
-5. [TravelBuddy Transaction History API](#5-travelbuddy-transaction-history-api)
+2. [Sheet Info API](#2-sheet-info-api)
+3. [All Data API](#3-all-data-api)
+4. [Remittance History API](#4-remittance-history-api)
+5. [Transactions History API](#5-transactions-history-api)
+6. [Rewards History API](#6-rewards-history-api)
+7. [TravelBuddy Transaction History API](#7-travelbuddy-transaction-history-api)
 
 ---
 
@@ -35,13 +39,100 @@ curl "http://localhost:9191/api/health"
 {
     "success": true,
     "message": "Server is running",
-    "timestamp": "2025-11-30T05:55:46.673Z"
+    "timestamp": "2025-11-30T05:55:46.673Z",
+    "excel_files": {
+        "remittance": "path/to/Vineet's Remittance.xlsx",
+        "transactions": "path/to/Vineet's Transactions.xlsx",
+        "rewards": "path/to/Vineet-Rewards History.xlsx",
+        "travelbuddy": "path/to/Vineet-TravelBuddy Trxn History.xlsx"
+    }
 }
 ```
 
 ---
 
-## 2. Remittance History API
+## 2. Sheet Info API
+
+### Endpoint
+```
+GET /api/sheets
+```
+
+### Description
+Get information about all Excel files and their sheet names.
+
+### Request
+```bash
+curl "http://localhost:9191/api/sheets"
+```
+
+### Response
+```json
+{
+    "success": true,
+    "message": "Sheet information fetched successfully",
+    "data": {
+        "remittance": {
+            "file": "path/to/Vineet's Remittance.xlsx",
+            "sheets": ["Vineet's Remittance"]
+        },
+        "transactions": {
+            "file": "path/to/Vineet's Transactions.xlsx",
+            "sheets": ["Vineet's Transaction report"]
+        },
+        "rewards": {
+            "file": "path/to/Vineet-Rewards History.xlsx",
+            "sheets": ["Transactions", "Load", "Flyy points"]
+        },
+        "travelbuddy": {
+            "file": "path/to/Vineet-TravelBuddy Trxn History.xlsx",
+            "sheets": ["Transactions", "Load"]
+        }
+    }
+}
+```
+
+---
+
+## 3. All Data API
+
+### Endpoint
+```
+GET /api/all
+```
+
+### Description
+Fetch ALL data from ALL Excel files in a single request. Useful for getting a complete snapshot of all data.
+
+### Request
+```bash
+curl "http://localhost:9191/api/all"
+```
+
+### Response
+```json
+{
+    "success": true,
+    "message": "All data fetched successfully",
+    "data": {
+        "remittance": [...],
+        "transactions": [...],
+        "rewards": {
+            "transactions": [...],
+            "load": [...],
+            "flyy_points": [...]
+        },
+        "travelbuddy": {
+            "transactions": [...],
+            "load": [...]
+        }
+    }
+}
+```
+
+---
+
+## 4. Remittance History API
 
 ### Endpoint
 ```
@@ -49,7 +140,7 @@ GET /api/remittance
 ```
 
 ### Description
-Fetch remittance transaction history. Data sourced from `Vineet's Remittance.xlsx`.
+Fetch remittance transaction history. **Data is read live from `Vineet's Remittance.xlsx` on each request.**
 
 ### Query Parameters
 
@@ -143,7 +234,7 @@ curl "http://localhost:9191/api/remittance?cpr=851276393&paymentmode=BFC%20Walle
 
 ---
 
-## 3. Transactions History API
+## 5. Transactions History API
 
 ### Endpoint
 ```
@@ -151,7 +242,7 @@ GET /api/transactions
 ```
 
 ### Description
-Fetch wallet transaction history. Data sourced from `Vineet's Transactions.xlsx`.
+Fetch wallet transaction history. **Data is read live from `Vineet's Transactions.xlsx` on each request.**
 
 ### Query Parameters
 
@@ -264,7 +355,7 @@ curl "http://localhost:9191/api/transactions?transaction_type=TRAVEL_CARD_LOAD&t
 
 ---
 
-## 4. Rewards History API
+## 6. Rewards History API
 
 ### Endpoint
 ```
@@ -272,7 +363,7 @@ GET /api/rewards
 ```
 
 ### Description
-Fetch rewards history including transactions, card loads, and Flyy points. Data sourced from `Vineet-Rewards History.xlsx` (3 sheets).
+Fetch rewards history including transactions, card loads, and Flyy points. **Data is read live from `Vineet-Rewards History.xlsx` (all sheets) on each request.**
 
 ### Query Parameters
 
@@ -326,6 +417,7 @@ curl "http://localhost:9191/api/rewards?customerId=851276393&type=flyy_points"
 {
     "success": true,
     "message": "Rewards history fetched successfully",
+    "sheets": ["transactions", "load", "flyy_points"],
     "data": {
         "transactions": [
             {
@@ -406,7 +498,7 @@ curl "http://localhost:9191/api/rewards?customerId=851276393&type=flyy_points"
 
 ---
 
-## 5. TravelBuddy Transaction History API
+## 7. TravelBuddy Transaction History API
 
 ### Endpoint
 ```
@@ -414,7 +506,7 @@ GET /api/travelbuddy
 ```
 
 ### Description
-Fetch TravelBuddy card transaction history. Data sourced from `Vineet-TravelBuddy Trxn History.xlsx` (2 sheets).
+Fetch TravelBuddy card transaction history. **Data is read live from `Vineet-TravelBuddy Trxn History.xlsx` (all sheets) on each request.**
 
 ### Query Parameters
 
@@ -487,6 +579,7 @@ curl "http://localhost:9191/api/travelbuddy?type=transactions&country=United%20S
 {
     "success": true,
     "message": "TravelBuddy transaction history fetched successfully",
+    "sheets": ["transactions", "load"],
     "data": {
         "transactions": [
             {
@@ -608,6 +701,12 @@ docker-compose down
 ```powershell
 # Health Check
 Invoke-RestMethod -Uri "http://localhost:9191/api/health"
+
+# Sheet Info
+Invoke-RestMethod -Uri "http://localhost:9191/api/sheets"
+
+# All Data
+Invoke-RestMethod -Uri "http://localhost:9191/api/all"
 
 # Remittance
 Invoke-RestMethod -Uri "http://localhost:9191/api/remittance"
