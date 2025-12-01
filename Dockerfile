@@ -14,10 +14,10 @@ RUN npm ci --only=production
 COPY server.js ./
 
 # Copy Excel files (data source)
-COPY "Vineet's Remittance.xlsx" ./
-COPY "Vineet's Transactions.xlsx" ./
-COPY "Vineet-Rewards History.xlsx" ./
-COPY "Vineet-TravelBuddy Trxn History.xlsx" ./
+COPY "remittance.xlsx" ./
+COPY "transactions.xlsx" ./
+COPY "rewardhistory.xlsx" ./
+COPY "travelbuddytxn.xlsx" ./
 
 # Expose port
 EXPOSE 9191

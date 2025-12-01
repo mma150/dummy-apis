@@ -2,10 +2,10 @@ const XlsxPopulate = require('xlsx-populate');
 const path = require('path');
 
 const files = [
-    "Vineet's Remittance.xlsx",
-    "Vineet's Transactions.xlsx",
-    "Vineet-Rewards History.xlsx",
-    "Vineet-TravelBuddy Trxn History.xlsx"
+    "remittance.xlsx",
+    "transactions.xlsx",
+    "rewardhistory.xlsx",
+    "travelbuddytxn.xlsx"
 ];
 
 async function readFiles() {
