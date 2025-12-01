@@ -11,10 +11,10 @@ const EXCEL_PASSWORD = 'BFCxMobi@2468';
 
 // Excel file paths
 const EXCEL_FILES = {
-    remittance: path.join(__dirname, "Vineet's Remittance.xlsx"),
-    transactions: path.join(__dirname, "Vineet's Transactions.xlsx"),
-    rewards: path.join(__dirname, "Vineet-Rewards History.xlsx"),
-    travelbuddy: path.join(__dirname, "Vineet-TravelBuddy Trxn History.xlsx")
+    remittance: path.join(__dirname, "remittance.xlsx"),
+    transactions: path.join(__dirname, "transactions.xlsx"),
+    rewards: path.join(__dirname, "rewardhistory.xlsx"),
+    travelbuddy: path.join(__dirname, "travelbuddytxn.xlsx")
 };
 
 // ============================================
