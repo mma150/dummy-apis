@@ -77,6 +77,94 @@ function isDateInRange(dateStr, startDate, endDate) {
     return true;
 }
 
+// Check if date is in specific month/year
+function isDateInMonth(dateStr, month, year) {
+    const date = parseDate(dateStr);
+    if (!date) return false; // Exclude if date can't be parsed
+    
+    return date.getMonth() + 1 === parseInt(month) && date.getFullYear() === parseInt(year);
+}
+
+// Get default month filter (current month) or from query params
+function getMonthFilter(query) {
+    const now = new Date();
+    const month = query.month || (now.getMonth() + 1); // 1-12
+    const year = query.year || now.getFullYear();
+    const all = query.all === 'true'; // If all=true, return all data
+    
+    return { month: parseInt(month), year: parseInt(year), all };
+}
+
+// Get month name from number
+function getMonthName(monthNum) {
+    const months = ['January', 'February', 'March', 'April', 'May', 'June', 
+                    'July', 'August', 'September', 'October', 'November', 'December'];
+    return months[monthNum - 1] || 'Unknown';
+}
+
+// Calculate statistics for an array of data
+function calculateStats(data, amountFields) {
+    if (!data || data.length === 0) {
+        return {
+            count: 0,
+            total_amount: 0,
+            max_amount: 0,
+            min_amount: 0,
+            average_amount: 0
+        };
+    }
+    
+    // Find the amount field that exists in the data
+    const fields = Array.isArray(amountFields) ? amountFields : [amountFields];
+    let amountField = null;
+    for (const field of fields) {
+        if (data[0] && data[0][field] !== undefined) {
+            amountField = field;
+            break;
+        }
+    }
+    
+    if (!amountField) {
+        return {
+            count: data.length,
+            total_amount: null,
+            max_amount: null,
+            min_amount: null,
+            average_amount: null,
+            note: 'Amount field not found in data'
+        };
+    }
+    
+    const amounts = data
+        .map(item => parseFloat(item[amountField]) || 0)
+        .filter(amt => !isNaN(amt));
+    
+    if (amounts.length === 0) {
+        return {
+            count: data.length,
+            total_amount: 0,
+            max_amount: 0,
+            min_amount: 0,
+            average_amount: 0,
+            amount_field: amountField
+        };
+    }
+    
+    const total = amounts.reduce((sum, amt) => sum + amt, 0);
+    const max = Math.max(...amounts);
+    const min = Math.min(...amounts);
+    const avg = total / amounts.length;
+    
+    return {
+        count: data.length,
+        total_amount: Math.round(total * 100) / 100,
+        max_amount: Math.round(max * 100) / 100,
+        min_amount: Math.round(min * 100) / 100,
+        average_amount: Math.round(avg * 100) / 100,
+        amount_field: amountField
+    };
+}
+
 // Read Excel sheet and convert to JSON array
 async function readExcelSheet(filePath, sheetName = null) {
     try {
@@ -137,9 +225,15 @@ async function getSheetNames(filePath) {
 app.get('/api/remittance', async (req, res) => {
     try {
         const { cpr, paymentmode, status } = req.query;
+        const { month, year, all } = getMonthFilter(req.query);
         
         // Read data from Excel file
         let data = await readExcelSheet(EXCEL_FILES.remittance);
+        
+        // Apply month filter (default: current month) unless all=true
+        if (!all) {
+            data = data.filter(item => isDateInMonth(item.timestamp_created, month, year));
+        }
         
         // Apply filters
         if (cpr) {
@@ -154,10 +248,17 @@ app.get('/api/remittance', async (req, res) => {
             data = data.filter(item => item.status === (status === 'true'));
         }
         
+        // Calculate statistics
+        const stats = calculateStats(data, ['total_amount_in_BHD', 'amount']);
+        
         res.json({
             success: true,
             message: "Remittance history fetched successfully",
+            filter_period: all ? 'All Time' : `${getMonthName(month)} ${year}`,
+            month: all ? null : month,
+            year: all ? null : year,
             total_records: data.length,
+            summary: stats,
             data: data
         });
     } catch (error) {
@@ -173,9 +274,15 @@ app.get('/api/remittance', async (req, res) => {
 app.get('/api/transactions', async (req, res) => {
     try {
         const { sender_cr, transaction_type, transaction_status, credit_debit } = req.query;
+        const { month, year, all } = getMonthFilter(req.query);
         
         // Read data from Excel file
         let data = await readExcelSheet(EXCEL_FILES.transactions);
+        
+        // Apply month filter (default: current month) unless all=true
+        if (!all) {
+            data = data.filter(item => isDateInMonth(item.transaction_date_time || item.created_date, month, year));
+        }
         
         // Apply filters
         if (sender_cr) {
@@ -197,10 +304,17 @@ app.get('/api/transactions', async (req, res) => {
             );
         }
         
+        // Calculate statistics
+        const stats = calculateStats(data, ['transaction_amount', 'amount', 'Amount']);
+        
         res.json({
             success: true,
             message: "Transaction history fetched successfully",
+            filter_period: all ? 'All Time' : `${getMonthName(month)} ${year}`,
+            month: all ? null : month,
+            year: all ? null : year,
             total_records: data.length,
+            summary: stats,
             data: data
         });
     } catch (error) {
@@ -216,6 +330,7 @@ app.get('/api/transactions', async (req, res) => {
 app.get('/api/rewards', async (req, res) => {
     try {
         const { customerId, type } = req.query;
+        const { month, year, all } = getMonthFilter(req.query);
         
         // Get all sheet names
         const sheetNames = await getSheetNames(EXCEL_FILES.rewards);
@@ -224,6 +339,12 @@ app.get('/api/rewards', async (req, res) => {
         let response = {};
         for (const sheetName of sheetNames) {
             let sheetData = await readExcelSheet(EXCEL_FILES.rewards, sheetName);
+            
+            // Apply month filter (default: current month) unless all=true
+            if (!all) {
+                const dateField = sheetName === 'Flyy points' ? 'Created_At' : 'Txn_Date';
+                sheetData = sheetData.filter(item => isDateInMonth(item[dateField], month, year));
+            }
             
             // Apply customerId filter
             if (customerId) {
@@ -243,10 +364,25 @@ app.get('/api/rewards', async (req, res) => {
             }
         }
         
+        // Calculate totals and stats per sheet
+        let totalRecords = 0;
+        let sheetSummaries = {};
+        Object.entries(response).forEach(([key, arr]) => {
+            totalRecords += arr.length;
+            // Calculate stats for each sheet based on its fields
+            const amountField = key === 'flyy_points' ? 'Points' : ['BHD_Amount', 'Amount', 'Txn_Amt', 'amount'];
+            sheetSummaries[key] = calculateStats(arr, amountField);
+        });
+        
         res.json({
             success: true,
             message: "Rewards history fetched successfully",
+            filter_period: all ? 'All Time' : `${getMonthName(month)} ${year}`,
+            month: all ? null : month,
+            year: all ? null : year,
             sheets: Object.keys(response),
+            total_records: totalRecords,
+            summary: sheetSummaries,
             data: response
         });
     } catch (error) {
@@ -262,6 +398,7 @@ app.get('/api/rewards', async (req, res) => {
 app.get('/api/travelbuddy', async (req, res) => {
     try {
         const { customerId, type, country, transactionType } = req.query;
+        const { month, year, all } = getMonthFilter(req.query);
         
         // Get all sheet names
         const sheetNames = await getSheetNames(EXCEL_FILES.travelbuddy);
@@ -270,6 +407,11 @@ app.get('/api/travelbuddy', async (req, res) => {
         let response = {};
         for (const sheetName of sheetNames) {
             let sheetData = await readExcelSheet(EXCEL_FILES.travelbuddy, sheetName);
+            
+            // Apply month filter (default: current month) unless all=true
+            if (!all) {
+                sheetData = sheetData.filter(item => isDateInMonth(item.Txn_Date, month, year));
+            }
             
             // Apply customerId filter
             if (customerId) {
@@ -303,10 +445,24 @@ app.get('/api/travelbuddy', async (req, res) => {
             }
         }
         
+        // Calculate totals and stats per sheet
+        let totalRecords = 0;
+        let sheetSummaries = {};
+        Object.entries(response).forEach(([key, arr]) => {
+            totalRecords += arr.length;
+            // Calculate stats for each sheet
+            sheetSummaries[key] = calculateStats(arr, ['BHD_Amount', 'Txn_Amt', 'Amount', 'amount', 'txn_amt']);
+        });
+        
         res.json({
             success: true,
             message: "TravelBuddy transaction history fetched successfully",
+            filter_period: all ? 'All Time' : `${getMonthName(month)} ${year}`,
+            month: all ? null : month,
+            year: all ? null : year,
             sheets: Object.keys(response),
+            total_records: totalRecords,
+            summary: sheetSummaries,
             data: response
         });
     } catch (error) {
@@ -321,6 +477,8 @@ app.get('/api/travelbuddy', async (req, res) => {
 // 5. Get all data from all sheets (combined endpoint)
 app.get('/api/all', async (req, res) => {
     try {
+        const { month, year, all } = getMonthFilter(req.query);
+        
         const response = {
             remittance: [],
             transactions: [],
@@ -329,28 +487,54 @@ app.get('/api/all', async (req, res) => {
         };
         
         // Read Remittance
-        response.remittance = await readExcelSheet(EXCEL_FILES.remittance);
+        let remittanceData = await readExcelSheet(EXCEL_FILES.remittance);
+        if (!all) {
+            remittanceData = remittanceData.filter(item => isDateInMonth(item.timestamp_created, month, year));
+        }
+        response.remittance = remittanceData;
         
         // Read Transactions
-        response.transactions = await readExcelSheet(EXCEL_FILES.transactions);
+        let transactionsData = await readExcelSheet(EXCEL_FILES.transactions);
+        if (!all) {
+            transactionsData = transactionsData.filter(item => isDateInMonth(item.transaction_date_time || item.created_date, month, year));
+        }
+        response.transactions = transactionsData;
         
         // Read Rewards (all sheets)
         const rewardsSheets = await getSheetNames(EXCEL_FILES.rewards);
         for (const sheetName of rewardsSheets) {
             const key = sheetName.toLowerCase().replace(/\s+/g, '_');
-            response.rewards[key] = await readExcelSheet(EXCEL_FILES.rewards, sheetName);
+            let sheetData = await readExcelSheet(EXCEL_FILES.rewards, sheetName);
+            if (!all) {
+                const dateField = sheetName === 'Flyy points' ? 'Created_At' : 'Txn_Date';
+                sheetData = sheetData.filter(item => isDateInMonth(item[dateField], month, year));
+            }
+            response.rewards[key] = sheetData;
         }
         
         // Read TravelBuddy (all sheets)
         const travelbuddySheets = await getSheetNames(EXCEL_FILES.travelbuddy);
         for (const sheetName of travelbuddySheets) {
             const key = sheetName.toLowerCase().replace(/\s+/g, '_');
-            response.travelbuddy[key] = await readExcelSheet(EXCEL_FILES.travelbuddy, sheetName);
+            let sheetData = await readExcelSheet(EXCEL_FILES.travelbuddy, sheetName);
+            if (!all) {
+                sheetData = sheetData.filter(item => isDateInMonth(item.Txn_Date, month, year));
+            }
+            response.travelbuddy[key] = sheetData;
         }
+        
+        // Calculate totals
+        let totalRecords = response.remittance.length + response.transactions.length;
+        Object.values(response.rewards).forEach(arr => totalRecords += arr.length);
+        Object.values(response.travelbuddy).forEach(arr => totalRecords += arr.length);
         
         res.json({
             success: true,
             message: "All data fetched successfully",
+            filter_period: all ? 'All Time' : `${getMonthName(month)} ${year}`,
+            month: all ? null : month,
+            year: all ? null : year,
+            total_records: totalRecords,
             data: response
         });
     } catch (error) {
