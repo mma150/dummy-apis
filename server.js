@@ -1,6 +1,7 @@
 const express = require('express');
 const XlsxPopulate = require('xlsx-populate');
 const path = require('path');
+const redis = require('redis');
 const app = express();
 const PORT = process.env.PORT || 9191;
 
@@ -8,6 +9,33 @@ app.use(express.json());
 
 // Excel password
 const EXCEL_PASSWORD = 'BFCxMobi@2468';
+
+// Redis configuration
+const REDIS_URL = process.env.REDIS_URL || 'redis://45.194.3.171:6379';
+const REDIS_DB = 0; // Database index for dummy-apis
+const CACHE_EXPIRY = 7 * 24 * 60 * 60; // 7 days in seconds
+
+// Create Redis client
+const redisClient = redis.createClient({
+    url: REDIS_URL,
+    database: REDIS_DB
+});
+
+// Redis connection handling
+redisClient.on('error', (err) => console.error('Redis Client Error:', err));
+redisClient.on('connect', () => console.log('Redis Client Connected'));
+redisClient.on('ready', () => console.log('Redis Client Ready'));
+
+// Connect to Redis
+(async () => {
+    try {
+        await redisClient.connect();
+        console.log(`Connected to Redis at ${REDIS_URL}, DB: ${REDIS_DB}`);
+    } catch (err) {
+        console.error('Failed to connect to Redis:', err.message);
+        console.log('Server will continue without caching');
+    }
+})();
 
 // Excel file paths
 const EXCEL_FILES = {
@@ -20,6 +48,63 @@ const EXCEL_FILES = {
 // ============================================
 // HELPER FUNCTIONS
 // ============================================
+
+// Generate cache key based on month-year-sheetName pattern
+function generateCacheKey(prefix, month, year, sheetName = 'default', additionalParams = {}) {
+    const baseKey = `dummy-apis:${prefix}:${year}-${month}:${sheetName}`;
+    const paramStr = Object.keys(additionalParams)
+        .filter(k => additionalParams[k] !== undefined && additionalParams[k] !== null)
+        .sort()
+        .map(k => `${k}=${additionalParams[k]}`)
+        .join(':');
+    return paramStr ? `${baseKey}:${paramStr}` : baseKey;
+}
+
+// Get data from cache
+async function getFromCache(key) {
+    try {
+        if (!redisClient.isOpen) return null;
+        const data = await redisClient.get(key);
+        if (data) {
+            console.log(`Cache HIT: ${key}`);
+            return JSON.parse(data);
+        }
+        console.log(`Cache MISS: ${key}`);
+        return null;
+    } catch (err) {
+        console.error('Redis get error:', err.message);
+        return null;
+    }
+}
+
+// Set data to cache with 7-day expiration
+async function setToCache(key, data) {
+    try {
+        if (!redisClient.isOpen) return false;
+        await redisClient.setEx(key, CACHE_EXPIRY, JSON.stringify(data));
+        console.log(`Cache SET: ${key} (expires in 7 days)`);
+        return true;
+    } catch (err) {
+        console.error('Redis set error:', err.message);
+        return false;
+    }
+}
+
+// Clear cache by pattern
+async function clearCacheByPattern(pattern) {
+    try {
+        if (!redisClient.isOpen) return false;
+        const keys = await redisClient.keys(pattern);
+        if (keys.length > 0) {
+            await redisClient.del(keys);
+            console.log(`Cleared ${keys.length} cache keys matching: ${pattern}`);
+        }
+        return true;
+    } catch (err) {
+        console.error('Redis clear error:', err.message);
+        return false;
+    }
+}
 
 // Parse JSON fields safely
 function parseJsonField(value) {
@@ -227,6 +312,15 @@ app.get('/api/remittance', async (req, res) => {
         const { cpr, paymentmode, status } = req.query;
         const { month, year, all } = getMonthFilter(req.query);
         
+        // Generate cache key
+        const cacheKey = generateCacheKey('remittance', month, year, 'default', { cpr, paymentmode, status, all: all ? 'true' : 'false' });
+        
+        // Try to get from cache
+        const cachedData = await getFromCache(cacheKey);
+        if (cachedData) {
+            return res.json({ ...cachedData, cached: true });
+        }
+        
         // Read data from Excel file
         let data = await readExcelSheet(EXCEL_FILES.remittance);
         
@@ -251,7 +345,7 @@ app.get('/api/remittance', async (req, res) => {
         // Calculate statistics
         const stats = calculateStats(data, ['total_amount_in_BHD', 'amount']);
         
-        res.json({
+        const responseData = {
             success: true,
             message: "Remittance history fetched successfully",
             filter_period: all ? 'All Time' : `${getMonthName(month)} ${year}`,
@@ -260,7 +354,12 @@ app.get('/api/remittance', async (req, res) => {
             total_records: data.length,
             summary: stats,
             data: data
-        });
+        };
+        
+        // Store in cache
+        await setToCache(cacheKey, responseData);
+        
+        res.json({ ...responseData, cached: false });
     } catch (error) {
         res.status(500).json({
             success: false,
@@ -275,6 +374,15 @@ app.get('/api/transactions', async (req, res) => {
     try {
         const { sender_cr, transaction_type, transaction_status, credit_debit } = req.query;
         const { month, year, all } = getMonthFilter(req.query);
+        
+        // Generate cache key
+        const cacheKey = generateCacheKey('transactions', month, year, 'default', { sender_cr, transaction_type, transaction_status, credit_debit, all: all ? 'true' : 'false' });
+        
+        // Try to get from cache
+        const cachedData = await getFromCache(cacheKey);
+        if (cachedData) {
+            return res.json({ ...cachedData, cached: true });
+        }
         
         // Read data from Excel file
         let data = await readExcelSheet(EXCEL_FILES.transactions);
@@ -307,7 +415,7 @@ app.get('/api/transactions', async (req, res) => {
         // Calculate statistics
         const stats = calculateStats(data, ['transaction_amount', 'amount', 'Amount']);
         
-        res.json({
+        const responseData = {
             success: true,
             message: "Transaction history fetched successfully",
             filter_period: all ? 'All Time' : `${getMonthName(month)} ${year}`,
@@ -316,7 +424,12 @@ app.get('/api/transactions', async (req, res) => {
             total_records: data.length,
             summary: stats,
             data: data
-        });
+        };
+        
+        // Store in cache
+        await setToCache(cacheKey, responseData);
+        
+        res.json({ ...responseData, cached: false });
     } catch (error) {
         res.status(500).json({
             success: false,
@@ -331,6 +444,15 @@ app.get('/api/rewards', async (req, res) => {
     try {
         const { customerId, type } = req.query;
         const { month, year, all } = getMonthFilter(req.query);
+        
+        // Generate cache key
+        const cacheKey = generateCacheKey('rewards', month, year, type || 'all', { customerId, all: all ? 'true' : 'false' });
+        
+        // Try to get from cache
+        const cachedData = await getFromCache(cacheKey);
+        if (cachedData) {
+            return res.json({ ...cachedData, cached: true });
+        }
         
         // Get all sheet names
         const sheetNames = await getSheetNames(EXCEL_FILES.rewards);
@@ -374,7 +496,7 @@ app.get('/api/rewards', async (req, res) => {
             sheetSummaries[key] = calculateStats(arr, amountField);
         });
         
-        res.json({
+        const responseData = {
             success: true,
             message: "Rewards history fetched successfully",
             filter_period: all ? 'All Time' : `${getMonthName(month)} ${year}`,
@@ -384,7 +506,12 @@ app.get('/api/rewards', async (req, res) => {
             total_records: totalRecords,
             summary: sheetSummaries,
             data: response
-        });
+        };
+        
+        // Store in cache
+        await setToCache(cacheKey, responseData);
+        
+        res.json({ ...responseData, cached: false });
     } catch (error) {
         res.status(500).json({
             success: false,
@@ -399,6 +526,15 @@ app.get('/api/travelbuddy', async (req, res) => {
     try {
         const { customerId, type, country, transactionType } = req.query;
         const { month, year, all } = getMonthFilter(req.query);
+        
+        // Generate cache key
+        const cacheKey = generateCacheKey('travelbuddy', month, year, type || 'all', { customerId, country, transactionType, all: all ? 'true' : 'false' });
+        
+        // Try to get from cache
+        const cachedData = await getFromCache(cacheKey);
+        if (cachedData) {
+            return res.json({ ...cachedData, cached: true });
+        }
         
         // Get all sheet names
         const sheetNames = await getSheetNames(EXCEL_FILES.travelbuddy);
@@ -454,7 +590,7 @@ app.get('/api/travelbuddy', async (req, res) => {
             sheetSummaries[key] = calculateStats(arr, ['BHD_Amount', 'Txn_Amt', 'Amount', 'amount', 'txn_amt']);
         });
         
-        res.json({
+        const responseData = {
             success: true,
             message: "TravelBuddy transaction history fetched successfully",
             filter_period: all ? 'All Time' : `${getMonthName(month)} ${year}`,
@@ -464,7 +600,12 @@ app.get('/api/travelbuddy', async (req, res) => {
             total_records: totalRecords,
             summary: sheetSummaries,
             data: response
-        });
+        };
+        
+        // Store in cache
+        await setToCache(cacheKey, responseData);
+        
+        res.json({ ...responseData, cached: false });
     } catch (error) {
         res.status(500).json({
             success: false,
@@ -478,6 +619,15 @@ app.get('/api/travelbuddy', async (req, res) => {
 app.get('/api/all', async (req, res) => {
     try {
         const { month, year, all } = getMonthFilter(req.query);
+        
+        // Generate cache key
+        const cacheKey = generateCacheKey('all', month, year, 'combined', { all: all ? 'true' : 'false' });
+        
+        // Try to get from cache
+        const cachedData = await getFromCache(cacheKey);
+        if (cachedData) {
+            return res.json({ ...cachedData, cached: true });
+        }
         
         const response = {
             remittance: [],
@@ -528,7 +678,7 @@ app.get('/api/all', async (req, res) => {
         Object.values(response.rewards).forEach(arr => totalRecords += arr.length);
         Object.values(response.travelbuddy).forEach(arr => totalRecords += arr.length);
         
-        res.json({
+        const responseData = {
             success: true,
             message: "All data fetched successfully",
             filter_period: all ? 'All Time' : `${getMonthName(month)} ${year}`,
@@ -536,7 +686,12 @@ app.get('/api/all', async (req, res) => {
             year: all ? null : year,
             total_records: totalRecords,
             data: response
-        });
+        };
+        
+        // Store in cache
+        await setToCache(cacheKey, responseData);
+        
+        res.json({ ...responseData, cached: false });
     } catch (error) {
         res.status(500).json({
             success: false,
@@ -547,13 +702,70 @@ app.get('/api/all', async (req, res) => {
 });
 
 // Health check endpoint
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
     res.json({
         success: true,
         message: "Server is running",
         timestamp: new Date().toISOString(),
+        redis: {
+            connected: redisClient.isOpen,
+            url: REDIS_URL,
+            database: REDIS_DB,
+            cache_expiry_days: 7
+        },
         excel_files: EXCEL_FILES
     });
+});
+
+// Cache management endpoint - clear cache
+app.delete('/api/cache', async (req, res) => {
+    try {
+        const { pattern } = req.query;
+        const searchPattern = pattern ? `dummy-apis:${pattern}*` : 'dummy-apis:*';
+        
+        await clearCacheByPattern(searchPattern);
+        
+        res.json({
+            success: true,
+            message: `Cache cleared for pattern: ${searchPattern}`,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: "Error clearing cache",
+            error: error.message
+        });
+    }
+});
+
+// Cache info endpoint - get cache stats
+app.get('/api/cache/info', async (req, res) => {
+    try {
+        if (!redisClient.isOpen) {
+            return res.json({
+                success: false,
+                message: "Redis not connected",
+                connected: false
+            });
+        }
+        
+        const keys = await redisClient.keys('dummy-apis:*');
+        
+        res.json({
+            success: true,
+            connected: true,
+            total_cached_keys: keys.length,
+            cache_expiry_days: 7,
+            keys: keys.slice(0, 50) // Return first 50 keys
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: "Error getting cache info",
+            error: error.message
+        });
+    }
 });
 
 // Get sheet info endpoint
@@ -593,7 +805,11 @@ app.get('/api/sheets', async (req, res) => {
 // Start server
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
-    console.log('\n📊 DATA APIs:');
+    console.log('\n🔴 REDIS CACHE:');
+    console.log(`  URL: ${REDIS_URL}`);
+    console.log(`  Database: ${REDIS_DB}`);
+    console.log(`  Cache Expiry: 7 days`);
+    console.log('\n📊 DATA APIs (with Redis caching):');
     console.log('  GET /api/remittance        - Get remittance history');
     console.log('  GET /api/transactions      - Get transaction history');
     console.log('  GET /api/rewards           - Get rewards history');
@@ -601,6 +817,9 @@ app.listen(PORT, () => {
     console.log('  GET /api/all               - Get all data');
     console.log('  GET /api/sheets            - Get sheet info');
     console.log('  GET /api/health            - Health check');
+    console.log('\n🗄️ CACHE APIs:');
+    console.log('  GET    /api/cache/info     - Get cache statistics');
+    console.log('  DELETE /api/cache          - Clear cache (optional ?pattern=)');
     console.log('\n📈 ANALYTICS APIs:');
     console.log('  GET /api/analytics/remittance/summary    - Remittance summary with date filter');
     console.log('  GET /api/analytics/transactions/summary  - Transaction summary with date filter');
