@@ -13,7 +13,7 @@ const EXCEL_PASSWORD = 'BFCxMobi@2468';
 // Redis configuration
 const REDIS_URL = process.env.REDIS_URL || 'redis://45.194.3.171:6379';
 const REDIS_DB = 0; // Database index for dummy-apis
-const CACHE_EXPIRY = 7 * 24 * 60 * 60; // 7 days in seconds
+const CACHE_EXPIRY = 60 * 24 * 60 * 60; // 2 months (60 days) in seconds
 
 // Create Redis client
 const redisClient = redis.createClient({
@@ -77,12 +77,12 @@ async function getFromCache(key) {
     }
 }
 
-// Set data to cache with 7-day expiration
+// Set data to cache with 2-month expiration
 async function setToCache(key, data) {
     try {
         if (!redisClient.isOpen) return false;
         await redisClient.setEx(key, CACHE_EXPIRY, JSON.stringify(data));
-        console.log(`Cache SET: ${key} (expires in 7 days)`);
+        console.log(`Cache SET: ${key} (expires in 2 months)`);
         return true;
     } catch (err) {
         console.error('Redis set error:', err.message);
@@ -711,7 +711,7 @@ app.get('/api/health', async (req, res) => {
             connected: redisClient.isOpen,
             url: REDIS_URL,
             database: REDIS_DB,
-            cache_expiry_days: 7
+            cache_expiry_days: 60
         },
         excel_files: EXCEL_FILES
     });
@@ -739,6 +739,157 @@ app.delete('/api/cache', async (req, res) => {
     }
 });
 
+// Cache warm-up endpoint - pre-load all data into cache
+app.post('/api/cache/warmup', async (req, res) => {
+    try {
+        if (!redisClient.isOpen) {
+            return res.status(503).json({
+                success: false,
+                message: "Redis not connected. Cannot warm up cache.",
+                connected: false
+            });
+        }
+
+        const startTime = Date.now();
+        const results = {
+            remittance: { success: false, records: 0 },
+            transactions: { success: false, records: 0 },
+            rewards: { success: false, records: 0, sheets: {} },
+            travelbuddy: { success: false, records: 0, sheets: {} }
+        };
+
+        // 1. Cache Remittance data (all data)
+        try {
+            const remittanceData = await readExcelSheet(EXCEL_FILES.remittance);
+            const remittanceCacheKey = generateCacheKey('remittance', 0, 0, 'default', { all: 'true' });
+            const remittanceStats = calculateStats(remittanceData, ['total_amount_in_BHD', 'amount']);
+            const remittanceResponse = {
+                success: true,
+                message: "Remittance history fetched successfully",
+                filter_period: 'All Time',
+                month: null,
+                year: null,
+                total_records: remittanceData.length,
+                summary: remittanceStats,
+                data: remittanceData
+            };
+            await setToCache(remittanceCacheKey, remittanceResponse);
+            results.remittance = { success: true, records: remittanceData.length };
+        } catch (err) {
+            results.remittance = { success: false, error: err.message };
+        }
+
+        // 2. Cache Transactions data (all data)
+        try {
+            const transactionsData = await readExcelSheet(EXCEL_FILES.transactions);
+            const transactionsCacheKey = generateCacheKey('transactions', 0, 0, 'default', { all: 'true' });
+            const transactionsStats = calculateStats(transactionsData, ['transaction_amount', 'amount', 'Amount']);
+            const transactionsResponse = {
+                success: true,
+                message: "Transaction history fetched successfully",
+                filter_period: 'All Time',
+                month: null,
+                year: null,
+                total_records: transactionsData.length,
+                summary: transactionsStats,
+                data: transactionsData
+            };
+            await setToCache(transactionsCacheKey, transactionsResponse);
+            results.transactions = { success: true, records: transactionsData.length };
+        } catch (err) {
+            results.transactions = { success: false, error: err.message };
+        }
+
+        // 3. Cache Rewards data (all sheets, all data)
+        try {
+            const rewardsSheetNames = await getSheetNames(EXCEL_FILES.rewards);
+            let totalRewardsRecords = 0;
+            const rewardsResponse = {};
+            const sheetSummaries = {};
+
+            for (const sheetName of rewardsSheetNames) {
+                const sheetData = await readExcelSheet(EXCEL_FILES.rewards, sheetName);
+                const key = sheetName.toLowerCase().replace(/\s+/g, '_');
+                rewardsResponse[key] = sheetData;
+                totalRewardsRecords += sheetData.length;
+                
+                const amountField = key === 'flyy_points' ? 'Points' : ['BHD_Amount', 'Amount', 'Txn_Amt', 'amount'];
+                sheetSummaries[key] = calculateStats(sheetData, amountField);
+                results.rewards.sheets[key] = sheetData.length;
+            }
+
+            const rewardsCacheKey = generateCacheKey('rewards', 0, 0, 'all', { all: 'true' });
+            const fullRewardsResponse = {
+                success: true,
+                message: "Rewards history fetched successfully",
+                filter_period: 'All Time',
+                total_records: totalRewardsRecords,
+                sheet_summaries: sheetSummaries,
+                available_sheets: rewardsSheetNames,
+                data: rewardsResponse
+            };
+            await setToCache(rewardsCacheKey, fullRewardsResponse);
+            results.rewards.success = true;
+            results.rewards.records = totalRewardsRecords;
+        } catch (err) {
+            results.rewards = { success: false, error: err.message };
+        }
+
+        // 4. Cache TravelBuddy data (all sheets, all data)
+        try {
+            const travelbuddySheetNames = await getSheetNames(EXCEL_FILES.travelbuddy);
+            let totalTravelbuddyRecords = 0;
+            const travelbuddyResponse = {};
+            const sheetSummaries = {};
+
+            for (const sheetName of travelbuddySheetNames) {
+                const sheetData = await readExcelSheet(EXCEL_FILES.travelbuddy, sheetName);
+                const key = sheetName.toLowerCase().replace(/\s+/g, '_');
+                travelbuddyResponse[key] = sheetData;
+                totalTravelbuddyRecords += sheetData.length;
+                sheetSummaries[key] = calculateStats(sheetData, ['Amount', 'amount', 'Transaction_Amount']);
+                results.travelbuddy.sheets[key] = sheetData.length;
+            }
+
+            const travelbuddyCacheKey = generateCacheKey('travelbuddy', 0, 0, 'all', { all: 'true' });
+            const fullTravelbuddyResponse = {
+                success: true,
+                message: "TravelBuddy history fetched successfully",
+                filter_period: 'All Time',
+                total_records: totalTravelbuddyRecords,
+                sheet_summaries: sheetSummaries,
+                available_sheets: travelbuddySheetNames,
+                data: travelbuddyResponse
+            };
+            await setToCache(travelbuddyCacheKey, fullTravelbuddyResponse);
+            results.travelbuddy.success = true;
+            results.travelbuddy.records = totalTravelbuddyRecords;
+        } catch (err) {
+            results.travelbuddy = { success: false, error: err.message };
+        }
+
+        const endTime = Date.now();
+        const totalRecords = results.remittance.records + results.transactions.records + 
+                            results.rewards.records + results.travelbuddy.records;
+
+        res.json({
+            success: true,
+            message: "Cache warm-up completed",
+            duration_ms: endTime - startTime,
+            total_records_cached: totalRecords,
+            cache_expiry: "2 months (60 days)",
+            results: results,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: "Error during cache warm-up",
+            error: error.message
+        });
+    }
+});
+
 // Cache info endpoint - get cache stats
 app.get('/api/cache/info', async (req, res) => {
     try {
@@ -756,7 +907,7 @@ app.get('/api/cache/info', async (req, res) => {
             success: true,
             connected: true,
             total_cached_keys: keys.length,
-            cache_expiry_days: 7,
+            cache_expiry_days: 60,
             keys: keys.slice(0, 50) // Return first 50 keys
         });
     } catch (error) {
@@ -808,7 +959,7 @@ app.listen(PORT, () => {
     console.log('\n🔴 REDIS CACHE:');
     console.log(`  URL: ${REDIS_URL}`);
     console.log(`  Database: ${REDIS_DB}`);
-    console.log(`  Cache Expiry: 7 days`);
+    console.log(`  Cache Expiry: 60 days (2 months)`);
     console.log('\n📊 DATA APIs (with Redis caching):');
     console.log('  GET /api/remittance        - Get remittance history');
     console.log('  GET /api/transactions      - Get transaction history');
@@ -819,6 +970,7 @@ app.listen(PORT, () => {
     console.log('  GET /api/health            - Health check');
     console.log('\n🗄️ CACHE APIs:');
     console.log('  GET    /api/cache/info     - Get cache statistics');
+    console.log('  POST   /api/cache/warmup   - Pre-load all data into cache');
     console.log('  DELETE /api/cache          - Clear cache (optional ?pattern=)');
     console.log('\n📈 ANALYTICS APIs:');
     console.log('  GET /api/analytics/remittance/summary    - Remittance summary with date filter');
