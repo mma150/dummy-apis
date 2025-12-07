@@ -28,3 +28,6 @@ build/
 # Temporary files
 tmp/
 temp/
+
+# In .gitignore
+/node_modules
