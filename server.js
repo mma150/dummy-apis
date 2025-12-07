@@ -374,14 +374,40 @@ async function getSheetNames(filePath) {
 // ============================================
 
 // Parse period string into start/end dates
+// Month name mapping for specific month parsing
+const MONTH_MAP = {
+    'jan': 0, 'january': 0,
+    'feb': 1, 'february': 1,
+    'mar': 2, 'march': 2,
+    'apr': 3, 'april': 3,
+    'may': 4,
+    'jun': 5, 'june': 5,
+    'jul': 6, 'july': 6,
+    'aug': 7, 'august': 7,
+    'sep': 8, 'sept': 8, 'september': 8,
+    'oct': 9, 'october': 9,
+    'nov': 10, 'november': 10,
+    'dec': 11, 'december': 11
+};
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+
 function parsePeriod(period) {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-    // Normalize period
-    const p = (period || '').toLowerCase().trim();
+    // Normalize period - handle various formats
+    const p = (period || '').toLowerCase().trim().replace(/\s+/g, '_').replace(/-/g, '_');
 
     switch (p) {
+        case 'today': {
+            return {
+                start: today,
+                end: new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999),
+                label: 'Today'
+            };
+        }
         case 'yesterday': {
             const yesterday = new Date(today);
             yesterday.setDate(yesterday.getDate() - 1);
@@ -391,27 +417,277 @@ function parsePeriod(period) {
                 label: 'Yesterday'
             };
         }
-        case 'week': {
+        case 'week':
+        case 'this_week':
+        case 'last_7_days': {
             const startOfWeek = new Date(today);
             startOfWeek.setDate(today.getDate() - 7);
             return { start: startOfWeek, end: now, label: 'Last 7 Days' };
         }
-        case 'month': {
+        case 'last_week':
+        case 'previous_week': {
+            const endOfLastWeek = new Date(today);
+            endOfLastWeek.setDate(today.getDate() - today.getDay()); // Go to last Sunday
+            endOfLastWeek.setHours(23, 59, 59, 999);
+            const startOfLastWeek = new Date(endOfLastWeek);
+            startOfLastWeek.setDate(endOfLastWeek.getDate() - 6);
+            startOfLastWeek.setHours(0, 0, 0, 0);
+            return { start: startOfLastWeek, end: endOfLastWeek, label: 'Last Week' };
+        }
+        case 'month':
+        case 'this_month': {
             const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
             return { start: startOfMonth, end: now, label: 'This Month' };
         }
-        case 'last_month': {
+        case 'last_month':
+        case 'previous_month': {
             const startOfLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
             const endOfLastMonth = new Date(today.getFullYear(), today.getMonth(), 0, 23, 59, 59, 999);
             return { start: startOfLastMonth, end: endOfLastMonth, label: 'Last Month' };
         }
-        case 'year': {
+        case 'last_3_months':
+        case 'quarter': {
+            const threeMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 3, 1);
+            return { start: threeMonthsAgo, end: now, label: 'Last 3 Months' };
+        }
+        case 'last_6_months':
+        case 'half_year': {
+            const sixMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 6, 1);
+            return { start: sixMonthsAgo, end: now, label: 'Last 6 Months' };
+        }
+        case 'year':
+        case 'this_year': {
             const startOfYear = new Date(today.getFullYear(), 0, 1);
             return { start: startOfYear, end: now, label: 'This Year' };
         }
-        default:
-            // Default to all time (null start/end) or handle specific future logic
+        case 'last_year':
+        case 'previous_year': {
+            const startOfLastYear = new Date(today.getFullYear() - 1, 0, 1);
+            const endOfLastYear = new Date(today.getFullYear() - 1, 11, 31, 23, 59, 59, 999);
+            return { start: startOfLastYear, end: endOfLastYear, label: 'Last Year' };
+        }
+        case 'last_30_days': {
+            const thirtyDaysAgo = new Date(today);
+            thirtyDaysAgo.setDate(today.getDate() - 30);
+            return { start: thirtyDaysAgo, end: now, label: 'Last 30 Days' };
+        }
+        case 'last_90_days': {
+            const ninetyDaysAgo = new Date(today);
+            ninetyDaysAgo.setDate(today.getDate() - 90);
+            return { start: ninetyDaysAgo, end: now, label: 'Last 90 Days' };
+        }
+        case 'all':
+        case 'all_time':
             return { start: null, end: null, label: 'All Time' };
+        default: {
+            // Week number mapping
+            const WEEK_NUM_MAP = {
+                'first': 1, '1st': 1, 'one': 1, '1': 1,
+                'second': 2, '2nd': 2, 'two': 2, '2': 2,
+                'third': 3, '3rd': 3, 'three': 3, '3': 3,
+                'fourth': 4, '4th': 4, 'four': 4, '4': 4,
+                'fifth': 5, '5th': 5, 'five': 5, '5': 5,
+                'last': -1
+            };
+
+            // Helper function to get week dates within a month
+            function getWeekOfMonth(year, monthIndex, weekNum) {
+                const firstDay = new Date(year, monthIndex, 1);
+                const lastDay = new Date(year, monthIndex + 1, 0);
+                const totalDays = lastDay.getDate();
+                
+                let startDay, endDay;
+                
+                if (weekNum === -1) {
+                    // Last week of month (last 7 days)
+                    endDay = totalDays;
+                    startDay = Math.max(1, totalDays - 6);
+                } else {
+                    // Week 1 = days 1-7, Week 2 = days 8-14, etc.
+                    startDay = (weekNum - 1) * 7 + 1;
+                    endDay = Math.min(weekNum * 7, totalDays);
+                    
+                    if (startDay > totalDays) {
+                        return null; // Invalid week number
+                    }
+                }
+                
+                const start = new Date(year, monthIndex, startDay);
+                const end = new Date(year, monthIndex, endDay, 23, 59, 59, 999);
+                return { start, end };
+            }
+
+            // Pattern W1: week_N_month_year (e.g., week_1_november_2024, week_2_dec_2024)
+            const weekMonthYearMatch = p.match(/^week_(\w+)_([a-z]+)_(\d{4})$/);
+            if (weekMonthYearMatch) {
+                const weekKey = weekMonthYearMatch[1];
+                const monthName = weekMonthYearMatch[2];
+                const year = parseInt(weekMonthYearMatch[3]);
+                const weekNum = WEEK_NUM_MAP[weekKey] || parseInt(weekKey);
+                
+                if (MONTH_MAP[monthName] !== undefined && weekNum && year >= 2000 && year <= 2100) {
+                    const monthIndex = MONTH_MAP[monthName];
+                    const weekDates = getWeekOfMonth(year, monthIndex, weekNum);
+                    if (weekDates) {
+                        const weekLabel = weekNum === -1 ? 'Last' : `Week ${weekNum}`;
+                        return { ...weekDates, label: `${weekLabel} of ${MONTH_NAMES[monthIndex]} ${year}` };
+                    }
+                }
+            }
+
+            // Pattern W2: first_week_month_year, second_week_november_2024, etc.
+            const ordinalWeekMatch = p.match(/^(\w+)_week_([a-z]+)_(\d{4})$/);
+            if (ordinalWeekMatch) {
+                const weekKey = ordinalWeekMatch[1];
+                const monthName = ordinalWeekMatch[2];
+                const year = parseInt(ordinalWeekMatch[3]);
+                const weekNum = WEEK_NUM_MAP[weekKey];
+                
+                if (MONTH_MAP[monthName] !== undefined && weekNum && year >= 2000 && year <= 2100) {
+                    const monthIndex = MONTH_MAP[monthName];
+                    const weekDates = getWeekOfMonth(year, monthIndex, weekNum);
+                    if (weekDates) {
+                        const weekLabel = weekNum === -1 ? 'Last Week' : `Week ${weekNum}`;
+                        return { ...weekDates, label: `${weekLabel} of ${MONTH_NAMES[monthIndex]} ${year}` };
+                    }
+                }
+            }
+
+            // Pattern W3: first_week_month, week_2_november (current/last year)
+            const weekMonthMatch = p.match(/^(?:week_)?(\w+)_week_([a-z]+)$/) || p.match(/^week_(\w+)_([a-z]+)$/);
+            if (weekMonthMatch) {
+                const weekKey = weekMonthMatch[1];
+                const monthName = weekMonthMatch[2];
+                const weekNum = WEEK_NUM_MAP[weekKey] || parseInt(weekKey);
+                
+                if (MONTH_MAP[monthName] !== undefined && weekNum) {
+                    const monthIndex = MONTH_MAP[monthName];
+                    const year = monthIndex > today.getMonth() ? today.getFullYear() - 1 : today.getFullYear();
+                    const weekDates = getWeekOfMonth(year, monthIndex, weekNum);
+                    if (weekDates) {
+                        const weekLabel = weekNum === -1 ? 'Last Week' : `Week ${weekNum}`;
+                        return { ...weekDates, label: `${weekLabel} of ${MONTH_NAMES[monthIndex]} ${year}` };
+                    }
+                }
+            }
+
+            // Pattern W4: first_week_of_month, last_week_of_december
+            const weekOfMonthMatch = p.match(/^(\w+)_week_of_([a-z]+)(?:_(\d{4}))?$/);
+            if (weekOfMonthMatch) {
+                const weekKey = weekOfMonthMatch[1];
+                const monthName = weekOfMonthMatch[2];
+                const yearStr = weekOfMonthMatch[3];
+                const weekNum = WEEK_NUM_MAP[weekKey] || parseInt(weekKey);
+                
+                if (MONTH_MAP[monthName] !== undefined && weekNum) {
+                    const monthIndex = MONTH_MAP[monthName];
+                    let year = yearStr ? parseInt(yearStr) : (monthIndex > today.getMonth() ? today.getFullYear() - 1 : today.getFullYear());
+                    const weekDates = getWeekOfMonth(year, monthIndex, weekNum);
+                    if (weekDates) {
+                        const weekLabel = weekNum === -1 ? 'Last Week' : `Week ${weekNum}`;
+                        return { ...weekDates, label: `${weekLabel} of ${MONTH_NAMES[monthIndex]} ${year}` };
+                    }
+                }
+            }
+
+            // Pattern W5: week_N_year_month (e.g., week_1_2024_11)
+            const weekYearMonthMatch = p.match(/^week_(\w+)_(\d{4})_(\d{1,2})$/);
+            if (weekYearMonthMatch) {
+                const weekKey = weekYearMonthMatch[1];
+                const year = parseInt(weekYearMonthMatch[2]);
+                const month = parseInt(weekYearMonthMatch[3]);
+                const weekNum = WEEK_NUM_MAP[weekKey] || parseInt(weekKey);
+                
+                if (month >= 1 && month <= 12 && weekNum && year >= 2000 && year <= 2100) {
+                    const monthIndex = month - 1;
+                    const weekDates = getWeekOfMonth(year, monthIndex, weekNum);
+                    if (weekDates) {
+                        const weekLabel = weekNum === -1 ? 'Last Week' : `Week ${weekNum}`;
+                        return { ...weekDates, label: `${weekLabel} of ${MONTH_NAMES[monthIndex]} ${year}` };
+                    }
+                }
+            }
+
+            // Try to parse specific month/year formats:
+            // Format: "november_2024", "nov_2024", "11_2024", "2024_11", "2024_november"
+            
+            // Pattern 1: month_year (e.g., november_2024, nov_2024)
+            const monthYearMatch = p.match(/^([a-z]+)_(\d{4})$/);
+            if (monthYearMatch) {
+                const monthName = monthYearMatch[1];
+                const year = parseInt(monthYearMatch[2]);
+                if (MONTH_MAP[monthName] !== undefined && year >= 2000 && year <= 2100) {
+                    const monthIndex = MONTH_MAP[monthName];
+                    const start = new Date(year, monthIndex, 1);
+                    const end = new Date(year, monthIndex + 1, 0, 23, 59, 59, 999);
+                    return { start, end, label: `${MONTH_NAMES[monthIndex]} ${year}` };
+                }
+            }
+
+            // Pattern 2: year_month (e.g., 2024_november, 2024_nov)
+            const yearMonthMatch = p.match(/^(\d{4})_([a-z]+)$/);
+            if (yearMonthMatch) {
+                const year = parseInt(yearMonthMatch[1]);
+                const monthName = yearMonthMatch[2];
+                if (MONTH_MAP[monthName] !== undefined && year >= 2000 && year <= 2100) {
+                    const monthIndex = MONTH_MAP[monthName];
+                    const start = new Date(year, monthIndex, 1);
+                    const end = new Date(year, monthIndex + 1, 0, 23, 59, 59, 999);
+                    return { start, end, label: `${MONTH_NAMES[monthIndex]} ${year}` };
+                }
+            }
+
+            // Pattern 3: numeric month_year (e.g., 11_2024)
+            const numMonthYearMatch = p.match(/^(\d{1,2})_(\d{4})$/);
+            if (numMonthYearMatch) {
+                const month = parseInt(numMonthYearMatch[1]);
+                const year = parseInt(numMonthYearMatch[2]);
+                if (month >= 1 && month <= 12 && year >= 2000 && year <= 2100) {
+                    const monthIndex = month - 1;
+                    const start = new Date(year, monthIndex, 1);
+                    const end = new Date(year, monthIndex + 1, 0, 23, 59, 59, 999);
+                    return { start, end, label: `${MONTH_NAMES[monthIndex]} ${year}` };
+                }
+            }
+
+            // Pattern 4: year_numeric month (e.g., 2024_11)
+            const yearNumMonthMatch = p.match(/^(\d{4})_(\d{1,2})$/);
+            if (yearNumMonthMatch) {
+                const year = parseInt(yearNumMonthMatch[1]);
+                const month = parseInt(yearNumMonthMatch[2]);
+                if (month >= 1 && month <= 12 && year >= 2000 && year <= 2100) {
+                    const monthIndex = month - 1;
+                    const start = new Date(year, monthIndex, 1);
+                    const end = new Date(year, monthIndex + 1, 0, 23, 59, 59, 999);
+                    return { start, end, label: `${MONTH_NAMES[monthIndex]} ${year}` };
+                }
+            }
+
+            // Pattern 5: year only (e.g., 2024, 2023)
+            const yearOnlyMatch = p.match(/^(\d{4})$/);
+            if (yearOnlyMatch) {
+                const year = parseInt(yearOnlyMatch[1]);
+                if (year >= 2000 && year <= 2100) {
+                    const start = new Date(year, 0, 1);
+                    const end = new Date(year, 11, 31, 23, 59, 59, 999);
+                    return { start, end, label: `Year ${year}` };
+                }
+            }
+
+            // Pattern 6: just month name for current year (e.g., "november", "oct")
+            if (MONTH_MAP[p] !== undefined) {
+                const monthIndex = MONTH_MAP[p];
+                const year = today.getFullYear();
+                // If the month is in the future, use last year
+                const useYear = monthIndex > today.getMonth() ? year - 1 : year;
+                const start = new Date(useYear, monthIndex, 1);
+                const end = new Date(useYear, monthIndex + 1, 0, 23, 59, 59, 999);
+                return { start, end, label: `${MONTH_NAMES[monthIndex]} ${useYear}` };
+            }
+
+            // Default to all time
+            return { start: null, end: null, label: 'All Time' };
+        }
     }
 }
 
@@ -1871,7 +2147,7 @@ app.get(`${MCP_BASE}/finance/savings-rate`, async (req, res) => {
 
         res.json({
             success: true,
-            tool: 'finance_savings_rate',
+            tool: 'get_savings_rate',
             period: dateRange.label,
             total_income: Math.round(income * 100) / 100,
             total_expense: Math.round(expense * 100) / 100,
@@ -1920,7 +2196,7 @@ app.get(`${MCP_BASE}/finance/predict`, async (req, res) => {
 
         res.json({
             success: true,
-            tool: 'finance_predict',
+            tool: 'predict_next_month_spend',
             category: category || 'All Spending',
             predicted_next_month: Math.round(monthlyAvg * 100) / 100,
             confidence: 'High'
@@ -1953,7 +2229,7 @@ app.get(`${MCP_BASE}/finance/optimize`, async (req, res) => {
 
         res.json({
             success: true,
-            tool: 'finance_optimize',
+            tool: 'optimize_budget',
             target: target_savings ? `${target_savings} BHD` : 'Higher Savings',
             suggestions: suggestions
         });
@@ -1991,7 +2267,7 @@ app.post(`${MCP_BASE}/finance/set-alert`, async (req, res) => {
 
         res.json({
             success: true,
-            tool: 'finance_set_alert',
+            tool: 'set_spend_alert',
             message: `Alert set for ${category} > ${threshold}`,
             alert_id: activeAlerts.length
         });
@@ -2029,7 +2305,7 @@ app.get(`${MCP_BASE}/utility/balance`, async (req, res) => {
 
         res.json({
             success: true,
-            tool: 'utility_balance',
+            tool: 'get_current_balance',
             current_balance: Math.round(balance * 100) / 100,
             currency: 'BHD'
         });
@@ -2058,7 +2334,7 @@ app.get(`${MCP_BASE}/utility/report`, async (req, res) => {
         // Return a mock download link
         res.json({
             success: true,
-            tool: 'utility_report',
+            tool: 'download_report',
             download_url: "http://localhost:9191/reports/summary_2024.pdf",
             status: "Ready"
         });
@@ -2099,7 +2375,7 @@ app.get(`${MCP_BASE}/utility/explain-category`, async (req, res) => {
 
         res.json({
             success: true,
-            tool: 'utility_explain',
+            tool: 'explain_category',
             category,
             explanation
         });

@@ -1,0 +1,636 @@
+[
+  {
+    "name": "get_spend_summary",
+    "description": "Get total spending summary including income, expenses, and net balance for a specified period",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/summary",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "string",
+          "description": "Time period for the summary (yesterday, week, month, last_month, year, or empty for all time)",
+          "enum": ["yesterday", "week", "month", "last_month", "year"]
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["period"]
+  },
+  {
+    "name": "get_spend_by_category",
+    "description": "Get spending breakdown by MCC category",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/by-category",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "string",
+          "description": "Time period for the breakdown (yesterday, week, month, last_month, year)",
+          "enum": ["yesterday", "week", "month", "last_month", "year"]
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["period"]
+  },
+  {
+    "name": "get_top_merchants",
+    "description": "Get top merchants by spending amount",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/top-merchants",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "string",
+          "description": "Time period for the analysis",
+          "enum": ["yesterday", "week", "month", "last_month", "year"]
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of merchants to return (default: 10)"
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["period", "limit"]
+  },
+  {
+    "name": "get_spend_trend",
+    "description": "Get month-over-month spending trend comparison",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/trend",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "months": {
+          "type": "integer",
+          "description": "Number of months to include in trend (default: 6)"
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["months"]
+  },
+  {
+    "name": "find_transactions",
+    "description": "Search transactions by merchant name or description",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/search",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search query for merchant name or transaction description"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of results to return (default: 5)"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Number of results to skip for pagination"
+        },
+        "period": {
+          "type": "string",
+          "description": "Time period to search within",
+          "enum": ["yesterday", "week", "month", "last_month", "year"]
+        }
+      },
+      "required": ["query"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["query", "limit", "offset", "period"]
+  },
+  {
+    "name": "get_subscription_list",
+    "description": "Detect potential recurring payments and subscriptions",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/subscriptions",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": []
+  },
+  {
+    "name": "get_daily_spend",
+    "description": "Get daily spending timeline breakdown",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/daily",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "string",
+          "description": "Time period for daily breakdown (default: week)",
+          "enum": ["yesterday", "week", "month", "last_month", "year"]
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["period"]
+  },
+  {
+    "name": "get_category_spend",
+    "description": "Get detailed spending for a specific category",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/category",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "description": "Category name to filter (e.g., Food, Travel, Shopping)"
+        },
+        "period": {
+          "type": "string",
+          "description": "Time period for the analysis",
+          "enum": ["yesterday", "week", "month", "last_month", "year"]
+        }
+      },
+      "required": ["category"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["category", "period"]
+  },
+  {
+    "name": "flag_unusual_activity",
+    "description": "Detect unusual or large spending transactions (outliers)",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/unusual",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "string",
+          "description": "Time period to analyze for unusual activity",
+          "enum": ["yesterday", "week", "month", "last_month", "year"]
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["period"]
+  },
+  {
+    "name": "get_trip_list",
+    "description": "List all identified travel trips based on foreign currency transactions",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/travel/trips",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": []
+  },
+  {
+    "name": "get_trip_spend",
+    "description": "Get detailed spending breakdown for a specific trip",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/travel/trip-spend",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "trip_id": {
+          "type": "string",
+          "description": "The unique trip identifier (e.g., Thailand_202411_15)"
+        }
+      },
+      "required": ["trip_id"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["trip_id"]
+  },
+  {
+    "name": "get_trip_load_vs_spend",
+    "description": "Compare travel wallet loaded amount vs spent amount for a trip",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/travel/load-vs-spend",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "trip_id": {
+          "type": "string",
+          "description": "The unique trip identifier"
+        }
+      },
+      "required": ["trip_id"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["trip_id"]
+  },
+  {
+    "name": "compare_trip_costs",
+    "description": "Compare spending between two trips",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/travel/compare",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "trip_id_1": {
+          "type": "string",
+          "description": "First trip identifier"
+        },
+        "trip_id_2": {
+          "type": "string",
+          "description": "Second trip identifier"
+        }
+      },
+      "required": ["trip_id_1", "trip_id_2"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["trip_id_1", "trip_id_2"]
+  },
+  {
+    "name": "get_trip_currency_mix",
+    "description": "Get currency usage breakdown for a specific trip",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/travel/currency-mix",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "trip_id": {
+          "type": "string",
+          "description": "The unique trip identifier"
+        }
+      },
+      "required": ["trip_id"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["trip_id"]
+  },
+  {
+    "name": "get_remittance_summary",
+    "description": "Get yearly remittance summary with totals, count, and averages",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/remittance/summary",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "year": {
+          "type": "integer",
+          "description": "Year for the summary (default: current year)"
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["year"]
+  },
+  {
+    "name": "get_recipient_stats",
+    "description": "Get remittance statistics for a specific recipient",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/remittance/recipient",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "recipient_name": {
+          "type": "string",
+          "description": "Name of the beneficiary/recipient to search for"
+        }
+      },
+      "required": ["recipient_name"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["recipient_name"]
+  },
+  {
+    "name": "get_remittance_trend",
+    "description": "Get year-over-year remittance trend comparison",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/remittance/trend",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "years": {
+          "type": "integer",
+          "description": "Number of years to include in trend (default: 3)"
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["years"]
+  },
+  {
+    "name": "find_remittances",
+    "description": "Search remittance transactions by purpose or beneficiary name",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/remittance/search",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search query for purpose of payment or beneficiary name"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of results to return (default: 5)"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Number of results to skip for pagination"
+        }
+      },
+      "required": ["query"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["query", "limit", "offset"]
+  },
+  {
+    "name": "latest_fx_rate",
+    "description": "Get current exchange rate for a currency (mock/live)",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/remittance/fx-rate",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string",
+          "description": "Currency code (e.g., INR, PHP, USD, EUR, GBP)"
+        }
+      },
+      "required": ["currency"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["currency"]
+  },
+  {
+    "name": "get_reward_summary",
+    "description": "Get total rewards summary including points, cashback, and tier status",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/rewards/summary",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": []
+  },
+  {
+    "name": "get_reward_activity",
+    "description": "Get rewards activity history by period",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/rewards/activity",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "string",
+          "description": "Time period for activity history",
+          "enum": ["yesterday", "week", "month", "last_month", "year"]
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["period"]
+  },
+  {
+    "name": "get_reward_expiry_alerts",
+    "description": "Get alerts for points expiring soon",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/rewards/expiry-alerts",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": []
+  },
+  {
+    "name": "get_best_reward_strategy",
+    "description": "Get best rewards strategy recommendation for a spending category",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/rewards/best-strategy",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "description": "Spending category (e.g., dining, grocery, travel, fuel)"
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["category"]
+  },
+  {
+    "name": "get_savings_rate",
+    "description": "Get savings rate analysis (income vs expense ratio)",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/finance/savings-rate",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "string",
+          "description": "Time period for analysis (default: month)",
+          "enum": ["yesterday", "week", "month", "last_month", "year"]
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["period"]
+  },
+  {
+    "name": "predict_next_month_spend",
+    "description": "Predict next month spending based on historical trends",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/finance/predict",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "description": "Optional category to predict spending for"
+        },
+        "months": {
+          "type": "integer",
+          "description": "Number of historical months to use for prediction"
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["category", "months"]
+  },
+  {
+    "name": "optimize_budget",
+    "description": "Get budget optimization and savings suggestions",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/finance/optimize",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "description": "Category to optimize spending for"
+        },
+        "target": {
+          "type": "number",
+          "description": "Target savings amount in BHD"
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["category", "target"]
+  },
+  {
+    "name": "set_spend_alert",
+    "description": "Set a spending alert for a category threshold",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/finance/set-alert",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "description": "Spending category to monitor"
+        },
+        "threshold": {
+          "type": "number",
+          "description": "Spending threshold amount to trigger alert"
+        }
+      },
+      "required": ["category", "threshold"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyParams": ["category", "threshold"]
+  },
+  {
+    "name": "get_current_balance",
+    "description": "Get current wallet balance",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/utility/balance",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": []
+  },
+  {
+    "name": "download_report",
+    "description": "Generate and get download URL for financial report",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/utility/report",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "string",
+          "description": "Time period for the report",
+          "enum": ["week", "month", "last_month", "year"]
+        },
+        "format": {
+          "type": "string",
+          "description": "Report format (pdf or excel)",
+          "enum": ["pdf", "excel"]
+        }
+      },
+      "required": []
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["period", "format"]
+  },
+  {
+    "name": "explain_category",
+    "description": "Get voice-friendly explanation of a spending category or term",
+    "endpoint": "https://dummy-api.omnikit.live/api/mcp/utility/explain-category",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "description": "Category or term to explain (e.g., mcc, pos, ecomm, atm)"
+        }
+      },
+      "required": ["category"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["category"]
+  }
+]
