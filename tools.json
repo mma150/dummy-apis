@@ -9,7 +9,8 @@
       "properties": {
         "period": {
           "type": "string",
-          "description": "Time period for the summary (yesterday, week, month, last_month, year, or empty for all time)"        }
+          "description": "Time period: yesterday, week, month, last_month, year, all_time, OR specific month like 'august_2024', 'aug_2024', '8_2024', '2024_8'. Also supports week of month like 'week_1_august_2024', 'first_week_of_november_2024'"
+        }
       },
       "required": []
     },
@@ -28,7 +29,7 @@
       "properties": {
         "period": {
           "type": "string",
-          "description": "Time period for the breakdown (yesterday, week, month, last_month, year)"
+          "description": "Time period: yesterday, week, month, last_month, year, OR specific month like 'august_2024', 'nov_2024', '8_2024'"
         }
       },
       "required": []
@@ -293,7 +294,7 @@
   },
   {
     "name": "get_remittance_summary",
-    "description": "Get yearly remittance summary with totals, count, and averages",
+    "description": "Get monthly or yearly remittance summary with totals, count, and averages",
     "endpoint": "https://dummy-api.omnikit.live/api/mcp/remittance/summary",
     "method": "GET",
     "inputSchema": {
@@ -302,6 +303,10 @@
         "year": {
           "type": "integer",
           "description": "Year for the summary (default: current year)"
+        },
+        "month": {
+          "type": "integer",
+          "description": "Month number (1-12) for month-wise filtering. Use with year for specific month like August 2024"
         }
       },
       "required": []
@@ -309,7 +314,7 @@
     "headers": {
       "Content-Type": "application/json"
     },
-    "queryParams": ["year"]
+    "queryParams": ["year", "month"]
   },
   {
     "name": "get_recipient_stats",

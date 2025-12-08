@@ -1977,32 +1977,46 @@ app.get(`${MCP_BASE}/travel/currency-mix`, async (req, res) => {
  *       - in: query
  *         name: year
  *         schema: { type: integer }
+ *       - in: query
+ *         name: month
+ *         schema: { type: integer }
+ *         description: Month number (1-12) for month-wise filtering
  *     responses:
  *       200:
- *         description: Yearly remittance summary
+ *         description: Monthly/Yearly remittance summary
  */
 app.get(`${MCP_BASE}/remittance/summary`, async (req, res) => {
     try {
-        const { year } = req.query;
+        const { year, month } = req.query;
         const targetYear = year ? parseInt(year) : new Date().getFullYear();
+        const targetMonth = month ? parseInt(month) : null;
 
         const txns = await getMcpData('remittance');
 
-        // Filter by year
-        const yearTxns = txns.filter(t => {
+        // Filter by year and optionally by month
+        const filteredTxns = txns.filter(t => {
             const date = parseDate(t.timestamp_created);
-            return date && date.getFullYear() === targetYear && t.status !== false; // Success only
+            if (!date || t.status === false) return false;
+            if (date.getFullYear() !== targetYear) return false;
+            if (targetMonth && (date.getMonth() + 1) !== targetMonth) return false;
+            return true;
         });
 
-        const totalAmount = yearTxns.reduce((sum, t) => sum + parseAmount(t.total_amount_in_BHD), 0);
+        const totalAmount = filteredTxns.reduce((sum, t) => sum + parseAmount(t.total_amount_in_BHD), 0);
+
+        // Build period label
+        const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+        const periodLabel = targetMonth ? `${MONTH_NAMES[targetMonth - 1]} ${targetYear}` : `Year ${targetYear}`;
 
         res.json({
             success: true,
             tool: 'remittance_summary',
+            period: periodLabel,
             year: targetYear,
+            month: targetMonth || null,
             total_remitted: Math.round(totalAmount * 100) / 100,
-            count: yearTxns.length,
-            average_amount: yearTxns.length ? Math.round((totalAmount / yearTxns.length) * 100) / 100 : 0
+            count: filteredTxns.length,
+            average_amount: filteredTxns.length ? Math.round((totalAmount / filteredTxns.length) * 100) / 100 : 0
         });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
