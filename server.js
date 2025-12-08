@@ -52,11 +52,110 @@ redisClient.on('error', (err) => console.error('Redis Client Error:', err));
 redisClient.on('connect', () => console.log('Redis Client Connected'));
 redisClient.on('ready', () => console.log('Redis Client Ready'));
 
+// Auto cache warmup function
+async function autoWarmupCache() {
+    if (!redisClient.isOpen) {
+        console.log('⚠️ Redis not connected, skipping auto-warmup');
+        return;
+    }
+
+    console.log('🔥 Starting auto cache warmup...');
+    const startTime = Date.now();
+
+    try {
+        // Check if cache already has data (avoid redundant warmup)
+        const testKey = 'dummy-apis:transactions:0-0:default:all=true';
+        const existing = await redisClient.get(testKey);
+        if (existing) {
+            console.log('✅ Cache already warm, skipping warmup');
+            return;
+        }
+
+        // Warmup small files first (fast)
+        const warmupPromises = [
+            (async () => {
+                const data = await readExcelSheet(EXCEL_FILES.remittance);
+                await setToCache('dummy-apis:remittance:0-0:default:all=true', {
+                    success: true,
+                    message: "Remittance history fetched successfully",
+                    filter_period: 'All Time',
+                    total_records: data.length,
+                    summary: calculateStats(data, ['total_amount_in_BHD', 'amount']),
+                    data: data
+                });
+                return { type: 'remittance', records: data.length };
+            })(),
+            (async () => {
+                const data = await readExcelSheet(EXCEL_FILES.transactions);
+                await setToCache('dummy-apis:transactions:0-0:default:all=true', {
+                    success: true,
+                    message: "Transaction history fetched successfully",
+                    filter_period: 'All Time',
+                    total_records: data.length,
+                    summary: calculateStats(data, ['transaction_amount', 'amount', 'Amount']),
+                    data: data
+                });
+                return { type: 'transactions', records: data.length };
+            })()
+        ];
+
+        const smallResults = await Promise.all(warmupPromises);
+        
+        // Now warmup large files by sheet (reduces memory pressure)
+        const largeFilePromises = [
+            // Rewards - cache each sheet separately
+            (async () => {
+                let totalRecords = 0;
+                for (const sheetName of ['Transactions', 'Load', 'Flyy points']) {
+                    const data = await readExcelSheet(EXCEL_FILES.rewards, sheetName);
+                    await setToCache(`dummy-apis:rewards:0-0:${sheetName}:all=true`, {
+                        success: true,
+                        sheet: sheetName,
+                        total_records: data.length,
+                        data: data
+                    });
+                    totalRecords += data.length;
+                }
+                return { type: 'rewards', records: totalRecords };
+            })(),
+            // TravelBuddy - cache each sheet separately
+            (async () => {
+                let totalRecords = 0;
+                for (const sheetName of ['Transactions', 'Load']) {
+                    const data = await readExcelSheet(EXCEL_FILES.travelbuddy, sheetName);
+                    await setToCache(`dummy-apis:travelbuddy:0-0:${sheetName}:all=true`, {
+                        success: true,
+                        sheet: sheetName,
+                        total_records: data.length,
+                        data: data
+                    });
+                    totalRecords += data.length;
+                }
+                return { type: 'travelbuddy', records: totalRecords };
+            })()
+        ];
+
+        const largeResults = await Promise.all(largeFilePromises);
+        const results = [...smallResults, ...largeResults];
+        const totalRecords = results.reduce((sum, r) => sum + r.records, 0);
+        const duration = Date.now() - startTime;
+
+        console.log(`✅ Auto cache warmup complete: ${totalRecords} records cached in ${duration}ms`);
+        results.forEach(r => console.log(`   - ${r.type}: ${r.records} records`));
+    } catch (err) {
+        console.error('❌ Auto cache warmup failed:', err.message);
+    }
+}
+
 // Connect to Redis
 (async () => {
     try {
         await redisClient.connect();
         console.log(`Connected to Redis at ${REDIS_URL}, DB: ${REDIS_DB}`);
+        
+        // Auto warmup cache after successful connection
+        // Use setTimeout to not block server startup
+        setTimeout(autoWarmupCache, 1000);
     } catch (err) {
         console.error('Failed to connect to Redis:', err.message);
         console.log('Server will continue without caching');
@@ -130,6 +229,92 @@ async function clearCacheByPattern(pattern) {
         console.error('Redis clear error:', err.message);
         return false;
     }
+}
+
+// ============================================
+// OPTIMIZED DATA LOADERS (per-sheet caching)
+// ============================================
+
+// In-memory cache for ultra-fast access (avoids Redis network latency)
+const memoryCache = new Map();
+const MEMORY_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getFromMemoryCache(key) {
+    const cached = memoryCache.get(key);
+    if (cached && cached.expiry > Date.now()) {
+        return cached.data;
+    }
+    // Expired or not found
+    if (cached) memoryCache.delete(key);
+    return null;
+}
+
+function setToMemoryCache(key, data) {
+    memoryCache.set(key, {
+        data: data,
+        expiry: Date.now() + MEMORY_CACHE_TTL
+    });
+}
+
+// Helper to get single sheet data (memory -> Redis -> file)
+async function getSheetData(fileType, sheetName, filePath) {
+    const memKey = `mem:${fileType}:${sheetName}`;
+    const redisKey = `dummy-apis:${fileType}:0-0:${sheetName}:all=true`;
+    
+    // 1. Check memory cache first (fastest)
+    const memCached = getFromMemoryCache(memKey);
+    if (memCached) {
+        return memCached;
+    }
+    
+    // 2. Check Redis cache
+    const redisCached = await getFromCache(redisKey);
+    if (redisCached && redisCached.data) {
+        // Store in memory for faster subsequent access
+        setToMemoryCache(memKey, redisCached.data);
+        return redisCached.data;
+    }
+    
+    // 3. Load from file and cache in both layers
+    const data = await readExcelSheet(filePath, sheetName);
+    const dataWithSheet = data.map(row => ({ ...row, _sheet: sheetName }));
+    
+    // Cache in both Redis and memory
+    setToMemoryCache(memKey, dataWithSheet);
+    setToCache(redisKey, {
+        success: true,
+        sheet: sheetName,
+        total_records: dataWithSheet.length,
+        data: dataWithSheet
+    });
+    
+    return dataWithSheet;
+}
+
+// Get rewards data - loads sheets in PARALLEL
+async function getRewardsData(sheetName = null) {
+    const sheets = sheetName ? [sheetName] : ['Transactions', 'Load', 'Flyy points'];
+    
+    // Load all sheets in parallel for better performance
+    const sheetPromises = sheets.map(sheet => 
+        getSheetData('rewards', sheet, EXCEL_FILES.rewards)
+    );
+    
+    const results = await Promise.all(sheetPromises);
+    return results.flat();
+}
+
+// Get travelbuddy data - loads sheets in PARALLEL
+async function getTravelBuddyData(sheetName = null) {
+    const sheets = sheetName ? [sheetName] : ['Transactions', 'Load'];
+    
+    // Load all sheets in parallel for better performance
+    const sheetPromises = sheets.map(sheet => 
+        getSheetData('travelbuddy', sheet, EXCEL_FILES.travelbuddy)
+    );
+    
+    const results = await Promise.all(sheetPromises);
+    return results.flat();
 }
 
 // Parse JSON fields safely
@@ -694,53 +879,78 @@ function parsePeriod(period) {
 // Universal data fetcher for MCP tools (Redis first, then fallback)
 // Returns standardized array of objects
 async function getMcpData(dataType) {
-    // 1. Try to get from Redis using the "all" key
-    // Keys defined in cache/warmup:
-    // remittance: dummy-apis:remittance:0-0:default:all=true
-    // transactions: dummy-apis:transactions:0-0:default:all=true
-    // rewards: dummy-apis:rewards:0-0:all:all=true (doesn't exist exactly like this in warmup, handle specially)
-    // travelbuddy: dummy-apis:travelbuddy:0-0:all:all=true (doesn't exist exactly like this in warmup, handle specially)
+    // For rewards and travelbuddy, use optimized per-sheet loaders
+    if (dataType === 'rewards') {
+        return await getRewardsData();
+    }
+    if (dataType === 'travelbuddy') {
+        return await getTravelBuddyData();
+    }
 
-    let cacheKey;
-    if (dataType === 'remittance') cacheKey = 'dummy-apis:remittance:0-0:default:all=true';
-    else if (dataType === 'transactions') cacheKey = 'dummy-apis:transactions:0-0:default:all=true';
-    else if (dataType === 'rewards') cacheKey = 'dummy-apis:rewards:0-0:all:all=true';
-    else if (dataType === 'travelbuddy') cacheKey = 'dummy-apis:travelbuddy:0-0:all:all=true';
+    // Memory cache keys for smaller files
+    const memKey = `mem:${dataType}:default`;
+    
+    // 1. Check memory cache first (fastest)
+    const memCached = getFromMemoryCache(memKey);
+    if (memCached) {
+        return memCached;
+    }
 
+    // Cache key mapping for smaller files
+    const CACHE_KEYS = {
+        remittance: 'dummy-apis:remittance:0-0:default:all=true',
+        transactions: 'dummy-apis:transactions:0-0:default:all=true'
+    };
+
+    const cacheKey = CACHE_KEYS[dataType];
+
+    // 2. Try to get from Redis cache
     if (cacheKey) {
         const cached = await getFromCache(cacheKey);
-        if (cached && cached.data) {
-            // Remittance/Transactions are arrays. Rewards/TravelBuddy might be objects (sheets).
-            if (Array.isArray(cached.data)) {
-                return cached.data;
-            } else if (typeof cached.data === 'object') {
-                // Flatten sheets into single array
-                let flat = [];
-                Object.values(cached.data).forEach(arr => {
-                    if (Array.isArray(arr)) flat = flat.concat(arr);
-                });
-                return flat;
-            }
+        if (cached && cached.data && Array.isArray(cached.data)) {
+            // Store in memory for faster subsequent access
+            setToMemoryCache(memKey, cached.data);
+            return cached.data;
         }
     }
 
-    // 2. Fallback: Read completely from Excel
-    // This is expensive but ensures data availability
+    // 3. Fallback: Read from Excel and CACHE the result for future requests
     console.log(`MCP Fallback: Reading ${dataType} from Excel...`);
 
+    let data = [];
+    let cacheResponse = null;
+
     if (dataType === 'remittance') {
-        return await readExcelSheet(EXCEL_FILES.remittance);
+        data = await readExcelSheet(EXCEL_FILES.remittance);
+        cacheResponse = {
+            success: true,
+            message: "Remittance history fetched successfully",
+            filter_period: 'All Time',
+            total_records: data.length,
+            summary: calculateStats(data, ['total_amount_in_BHD', 'amount']),
+            data: data
+        };
     } else if (dataType === 'transactions') {
-        return await readExcelSheet(EXCEL_FILES.transactions);
-    } else if (dataType === 'rewards') {
-        // Use optimized reader
-        return await readAllExcelSheets(EXCEL_FILES.rewards);
-    } else if (dataType === 'travelbuddy') {
-        // Use optimized reader
-        return await readAllExcelSheets(EXCEL_FILES.travelbuddy);
+        data = await readExcelSheet(EXCEL_FILES.transactions);
+        cacheResponse = {
+            success: true,
+            message: "Transaction history fetched successfully",
+            filter_period: 'All Time',
+            total_records: data.length,
+            summary: calculateStats(data, ['transaction_amount', 'amount', 'Amount']),
+            data: data
+        };
     }
 
-    return [];
+    // Cache in both memory and Redis
+    setToMemoryCache(memKey, data);
+    if (cacheKey && cacheResponse) {
+        setToCache(cacheKey, cacheResponse).catch(err => 
+            console.error(`Failed to cache ${dataType}:`, err.message)
+        );
+    }
+
+    return data;
 }
 
 // Helper to filter data by date range
@@ -761,6 +971,34 @@ function parseAmount(val) {
     if (typeof val === 'number') return val;
     if (typeof val === 'string') return parseFloat(val.replace(/,/g, '')) || 0;
     return 0;
+}
+
+// Case-insensitive string comparison helper
+function equalsIgnoreCase(str, target) {
+    return (str || '').toUpperCase() === target.toUpperCase();
+}
+
+// Check if transaction is a debit (spending)
+function isDebit(t) {
+    const cd = (t.credit_debit || '').toUpperCase();
+    return cd === 'DEBIT' || cd === 'D';
+}
+
+// Check if transaction is a credit (income)
+function isCredit(t) {
+    const cd = (t.credit_debit || '').toUpperCase();
+    return cd === 'CREDIT' || cd === 'C';
+}
+
+// Check if transaction is a LOAD type
+function isLoad(t) {
+    return equalsIgnoreCase(t.transactionType_dsc, 'LOAD');
+}
+
+// Get best available amount field from transaction (always returns absolute value)
+function getTxnAmount(t) {
+    const amt = parseAmount(t.Transacted_Amount_in_BHD || t.Amount || t.BHD_Amount || t.transaction_amount || t.amount || t.txn_amt || t.bill_amt);
+    return Math.abs(amt);
 }
 
 // ============================================
@@ -821,23 +1059,18 @@ app.get(`${MCP_BASE}/spend/summary`, async (req, res) => {
             getMcpData('travelbuddy')
         ]);
 
-        // Filter valid spending transactions
-        // Transactions: credit_debit = 'Debit', status = 'Clean' (or similar success status)
-        const mainSpend = txns.filter(t =>
-            (t.credit_debit === 'Debit' || t.credit_debit === 'D') &&
-            t.transaction_amount
-        );
+        // Filter valid spending transactions (using case-insensitive helpers)
+        const mainSpend = txns.filter(t => isDebit(t) && getTxnAmount(t) > 0);
 
-        // TravelBuddy: filter for transactions (look for amount fields)
-        const travelSpend = travelTxns.filter(t =>
-            // Exclude 'Loads' usually, just spending
-            (t.transactionType_dsc !== 'Load') &&
-            (t.amount || t.txn_amt || t.bill_amt)
-        );
+        // TravelBuddy: filter for spend transactions (not loads)
+        const travelSpend = travelTxns.filter(t => {
+            if (isLoad(t)) return false;
+            const amt = getTxnAmount(t);
+            return amt > 0;
+        });
 
         // Filter by date
         const filteredMain = filterByDate(mainSpend, dateRange, 'transaction_date_time');
-        // TravelBuddy dates might be 'Txn_Date' or similar
         const filteredTravel = filterByDate(travelSpend, dateRange, 'Txn_Date');
 
         // Calculate totals
@@ -846,23 +1079,19 @@ app.get(`${MCP_BASE}/spend/summary`, async (req, res) => {
         let txnCount = 0;
 
         filteredMain.forEach(t => {
-            totalSpent += parseAmount(t.transaction_amount);
+            totalSpent += getTxnAmount(t);
             txnCount++;
         });
 
         filteredTravel.forEach(t => {
-            // Check multiple potential amount fields
-            const amt = parseAmount(t.amount || t.txn_amt || t.bill_amt);
-            totalSpent += amt;
+            totalSpent += getTxnAmount(t);
             txnCount++;
         });
 
         // Calculate Income from main transactions (Credit)
-        const mainIncome = txns.filter(t =>
-            (t.credit_debit === 'Credit' || t.credit_debit === 'C')
-        );
+        const mainIncome = txns.filter(t => isCredit(t));
         const filteredIncome = filterByDate(mainIncome, dateRange, 'transaction_date_time');
-        filteredIncome.forEach(t => totalIncome += parseAmount(t.transaction_amount));
+        filteredIncome.forEach(t => totalIncome += getTxnAmount(t));
 
         res.json({
             success: true,
@@ -926,22 +1155,26 @@ app.get(`${MCP_BASE}/spend/by-category`, async (req, res) => {
 
         const txns = await getMcpData('transactions');
 
-        const debitTxns = txns.filter(t =>
-            (t.credit_debit === 'Debit' || t.credit_debit === 'D')
-        );
+        const debitTxns = txns.filter(t => isDebit(t));
 
+        
         const filtered = filterByDate(debitTxns, dateRange, 'transaction_date_time');
-
+    
         const categoryMap = {};
 
         filtered.forEach(t => {
-            // Use 'mcc_description' or 'transaction_description' as category proxy if mcc missing
-            let cat = t.mcc_description || 'Uncategorized';
-            // Simple cleanup
-            cat = cat.replace(/\d+/g, '').trim();
+            // Use 'MCC_Category' as primary, fallback to 'mcc_description'
+            let cat = t.MCC_Category || t.mcc_description || 'Uncategorized';
+            // Handle case where category might be an object
+            if (!cat || typeof cat === 'object') {
+                cat = 'Uncategorized';
+            } else {
+                cat = String(cat).trim();
+            }
+            // Skip cleanup if we have a valid MCC_Category
             if (cat.length < 3) cat = 'General';
 
-            const amt = parseAmount(t.transaction_amount);
+            const amt = getTxnAmount(t);
 
             if (!categoryMap[cat]) categoryMap[cat] = 0;
             categoryMap[cat] += amt;
@@ -990,15 +1223,19 @@ app.get(`${MCP_BASE}/spend/top-merchants`, async (req, res) => {
         const dateRange = parsePeriod(period);
 
         const txns = await getMcpData('transactions');
-        const debitTxns = txns.filter(t => (t.credit_debit === 'Debit' || t.credit_debit === 'D'));
+        const debitTxns = txns.filter(t => isDebit(t));
         const filtered = filterByDate(debitTxns, dateRange, 'transaction_date_time');
 
         const merchantMap = {};
 
         filtered.forEach(t => {
-            let merchant = t.merchant_name || t.transaction_description || 'Unknown';
-            merchant = merchant.trim();
-            const amt = parseAmount(t.transaction_amount);
+            // Use description field (actual field name in transactions Excel)
+            let merchant = t.description || t.merchant_name || t.transaction_description || 'Unknown';
+            merchant = String(merchant).trim();
+            if (!merchant || merchant === '') merchant = 'Unknown';
+            
+            // Use absolute value for debit amounts (they may be stored as negative)
+            const amt = Math.abs(getTxnAmount(t));
 
             if (!merchantMap[merchant]) merchantMap[merchant] = { amount: 0, count: 0 };
             merchantMap[merchant].amount += amt;
@@ -1034,7 +1271,11 @@ app.get(`${MCP_BASE}/spend/top-merchants`, async (req, res) => {
  *     tags: [Spending]
  *     parameters:
  *       - in: query
- *         name: months
+ *         name:  
+ * 
+ * 
+ * 
+ * 
  *         schema: { type: integer, default: 6 }
  *     responses:
  *       200:
@@ -1047,7 +1288,7 @@ app.get(`${MCP_BASE}/spend/trend`, async (req, res) => {
         const now = new Date();
 
         const txns = await getMcpData('transactions');
-        const debitTxns = txns.filter(t => (t.credit_debit === 'Debit' || t.credit_debit === 'D'));
+        const debitTxns = txns.filter(t => isDebit(t));
 
         // Group by month YYYY-MM
         const monthStats = {};
@@ -1064,7 +1305,7 @@ app.get(`${MCP_BASE}/spend/trend`, async (req, res) => {
             const monthName = getMonthName(date.getMonth() + 1);
 
             if (!monthStats[key]) monthStats[key] = { month: monthName, year: date.getFullYear(), amount: 0 };
-            monthStats[key].amount += parseAmount(t.transaction_amount);
+            monthStats[key].amount += getTxnAmount(t);
         });
 
         const trend = Object.keys(monthStats).sort().map(key => ({
@@ -1116,16 +1357,19 @@ app.get(`${MCP_BASE}/spend/search`, async (req, res) => {
         const filteredTime = filterByDate(txns, dateRange, 'transaction_date_time');
 
         const matches = filteredTime.filter(t => {
-            const desc = (t.transaction_description || '').toLowerCase();
-            const merch = (t.merchant_name || '').toLowerCase();
-            return desc.includes(lowerQuery) || merch.includes(lowerQuery);
+            const desc = (t.description || '').toLowerCase();
+            const txnType = (t.transaction_type || '').toLowerCase();
+            const bfcType = (t.bfc_type || '').toLowerCase();
+            const subType = (t.sub_transaction_type || '').toLowerCase();
+            return desc.includes(lowerQuery) || txnType.includes(lowerQuery) || bfcType.includes(lowerQuery) || subType.includes(lowerQuery);
         });
 
         const results = matches.slice(0, parseInt(limit)).map(t => ({
             date: t.transaction_date_time,
-            merchant: t.merchant_name || t.transaction_description,
-            amount: t.transaction_amount,
-            category: t.mcc_description
+            description: t.description || t.transaction_type || 'Unknown',
+            type: t.transaction_type,
+            amount: getTxnAmount(t),
+            credit_debit: t.credit_debit
         }));
 
         res.json({
@@ -1154,17 +1398,17 @@ app.get(`${MCP_BASE}/spend/search`, async (req, res) => {
 app.get(`${MCP_BASE}/spend/subscriptions`, async (req, res) => {
     try {
         const txns = await getMcpData('transactions');
-        const debitTxns = txns.filter(t => (t.credit_debit === 'Debit' || t.credit_debit === 'D'));
+        const debitTxns = txns.filter(t => isDebit(t));
 
         // Logic: Same merchant, similar amount (+/- 5%), regular intervals (approx 30 days)
         // Simplified: Group by merchant + approx amount
         const recurringMap = {};
 
         debitTxns.forEach(t => {
-            const merchant = (t.merchant_name || 'Unknown').trim();
+            const merchant = (t.description || t.merchant_name || 'Unknown').trim();
             if (merchant === 'Unknown') return;
 
-            const amt = parseAmount(t.transaction_amount);
+            const amt = Math.abs(getTxnAmount(t));
             if (amt < 1) return; // Ignore tiny amounts
 
             const key = `${merchant}_${Math.round(amt)}`; // strict amount matching for now
@@ -1220,7 +1464,7 @@ app.get(`${MCP_BASE}/spend/daily`, async (req, res) => {
         const dateRange = parsePeriod(period || 'week'); // Default to week
 
         const txns = await getMcpData('transactions');
-        const debitTxns = txns.filter(t => (t.credit_debit === 'Debit' || t.credit_debit === 'D'));
+        const debitTxns = txns.filter(t => isDebit(t));
         const filtered = filterByDate(debitTxns, dateRange, 'transaction_date_time');
 
         const dailyStats = {};
@@ -1231,7 +1475,7 @@ app.get(`${MCP_BASE}/spend/daily`, async (req, res) => {
 
             const key = date.toISOString().split('T')[0]; // YYYY-MM-DD
             if (!dailyStats[key]) dailyStats[key] = 0;
-            dailyStats[key] += parseAmount(t.transaction_amount);
+            dailyStats[key] += getTxnAmount(t);
         });
 
         const timeline = Object.entries(dailyStats)
@@ -1280,20 +1524,20 @@ app.get(`${MCP_BASE}/spend/category`, async (req, res) => {
         const lowerCat = category.toLowerCase();
 
         const txns = await getMcpData('transactions');
-        const debitTxns = txns.filter(t => (t.credit_debit === 'Debit' || t.credit_debit === 'D'));
+        const debitTxns = txns.filter(t => isDebit(t));
         const filtered = filterByDate(debitTxns, dateRange, 'transaction_date_time');
 
         const matches = filtered.filter(t =>
-            (t.mcc_description || '').toLowerCase().includes(lowerCat)
+            (t.MCC_Category || t.mcc_description || '').toLowerCase().includes(lowerCat)
         );
 
-        const total = matches.reduce((sum, t) => sum + parseAmount(t.transaction_amount), 0);
+        const total = matches.reduce((sum, t) => sum + Math.abs(getTxnAmount(t)), 0);
 
         const topMerchants = {};
         matches.forEach(t => {
-            const merch = t.merchant_name || 'Unknown';
+            const merch = t.description || t.merchant_name || 'Unknown';
             if (!topMerchants[merch]) topMerchants[merch] = 0;
-            topMerchants[merch] += parseAmount(t.transaction_amount);
+            topMerchants[merch] += Math.abs(getTxnAmount(t));
         });
 
         res.json({
@@ -1335,15 +1579,15 @@ app.get(`${MCP_BASE}/spend/unusual`, async (req, res) => {
         const dateRange = parsePeriod(period);
 
         const txns = await getMcpData('transactions');
-        const debitTxns = txns.filter(t => (t.credit_debit === 'Debit' || t.credit_debit === 'D'));
+        const debitTxns = txns.filter(t => isDebit(t));
         const filtered = filterByDate(debitTxns, dateRange, 'transaction_date_time');
 
         const unusual = filtered
-            .filter(t => parseAmount(t.transaction_amount) > THRESHOLD)
+            .filter(t => Math.abs(getTxnAmount(t)) > THRESHOLD)
             .map(t => ({
                 date: t.transaction_date_time,
-                merchant: t.merchant_name,
-                amount: t.transaction_amount,
+                merchant: t.description || t.merchant_name || 'Unknown',
+                amount: Math.abs(getTxnAmount(t)),
                 reason: `Amount exceeds ${THRESHOLD}`
             }))
             .sort((a, b) => b.amount - a.amount)
@@ -1381,9 +1625,16 @@ function identifyTrips(travelTxns) {
 
     sorted.forEach(t => {
         // Only look at foreign transactions (country != 'Bahrain')
-        // Assuming 'Bahrain' is home, or just grouping by country changes
-        const country = t.country || 'Unknown';
-        if (country === 'Bahrain' || country === 'Unknown') return;
+        // Use 'Country' field (capital C) as that's the actual field name in Excel
+        let country = t.Country || t.country || 'Unknown';
+        
+        // Handle cases where country is an error object (e.g., {_error: "#N/A"})
+        if (typeof country === 'object') {
+            country = 'Unknown';
+        }
+        
+        // Skip records with Unknown or Bahrain
+        if (country === 'Bahrain' || country === 'Unknown' || !country) return;
 
         const date = parseDate(t.Txn_Date);
         if (!date) return;
@@ -1409,9 +1660,10 @@ function identifyTrips(travelTxns) {
         // Add to current trip
         currentTrip.end_date = date; // extend end date
         currentTrip.transaction_count++;
-        // Add amount if it's a spend (not load)
-        if (t.transactionType_dsc !== 'Load') {
-            currentTrip.total_spend += parseAmount(t.amount || t.txn_amt || t.bill_amt);
+        // Add amount if it's a spend (not load) - case-insensitive check
+        const txnType = (t.transactionType_dsc || '').toUpperCase();
+        if (txnType !== 'LOAD') {
+            currentTrip.total_spend += parseAmount(t.Amount || t.BHD_Amount || t.amount || t.txn_amt || t.bill_amt);
         }
     });
 
@@ -1427,18 +1679,37 @@ function identifyTrips(travelTxns) {
  *     summary: List travel trips
  *     description: Identifies trips based on foreign currency transactions.
  *     tags: [Travel]
+ *     parameters:
+ *       - in: query
+ *         name: period
+ *         schema: { type: string }
+ *         description: Filter by period (e.g., "this month", "last 3 months", "2024", "January")
  *     responses:
  *       200:
  *         description: List of identified trips
  */
 app.get(`${MCP_BASE}/travel/trips`, async (req, res) => {
     try {
-        const txns = await getMcpData('travelbuddy');
-        const trips = identifyTrips(txns); // uses all time data to identify
+        const { period } = req.query;
+        const dateRange = parsePeriod(period);
+        
+        let txns = await getMcpData('travelbuddy');
+        
+        // Filter by period if specified
+        if (dateRange.start || dateRange.end) {
+            txns = txns.filter(t => {
+                const date = parseDate(t.Txn_Date);
+                if (!date) return false;
+                if (dateRange.start && date < dateRange.start) return false;
+                if (dateRange.end && date > dateRange.end) return false;
+                return true;
+            });
+        }
+        
+        const trips = identifyTrips(txns);
 
         // Return summary list
         const summary = trips.map(t => ({
-            id: t.trip_id,
             country: t.country,
             dates: `${t.start_date.toISOString().split('T')[0]} to ${t.end_date.toISOString().split('T')[0]}`,
             spend: Math.round(t.total_spend * 100) / 100
@@ -1447,6 +1718,7 @@ app.get(`${MCP_BASE}/travel/trips`, async (req, res) => {
         res.json({
             success: true,
             tool: 'travel_trips',
+            period: dateRange.label,
             count: summary.length,
             trips: summary
         });
@@ -1486,16 +1758,17 @@ app.get(`${MCP_BASE}/travel/trip-spend`, async (req, res) => {
         // Re-implement simplified matching logic or just filter by date/country
         const tripTxns = txns.filter(t => {
             const date = parseDate(t.Txn_Date);
+            const txnType = (t.transactionType_dsc || '').toUpperCase();
             return t.country === trip.country &&
                 date >= trip.start_date &&
                 date <= trip.end_date &&
-                t.transactionType_dsc !== 'Load';
+                txnType !== 'LOAD';
         });
 
         // Top categories for this trip
         const catMap = {};
         tripTxns.forEach(t => {
-            const cat = t.mcc_description || 'General';
+            const cat = t.MCC_Category || t.mcc_description || 'General';
             const amt = parseAmount(t.amount || t.txn_amt || t.bill_amt);
             if (!catMap[cat]) catMap[cat] = 0;
             catMap[cat] += amt;
@@ -1556,7 +1829,8 @@ app.get(`${MCP_BASE}/travel/load-vs-spend`, async (req, res) => {
 
         const tripLoads = txns.filter(t => {
             const date = parseDate(t.Txn_Date);
-            return t.transactionType_dsc === 'Load' &&
+            const txnType = (t.transactionType_dsc || '').toUpperCase();
+            return txnType === 'LOAD' &&
                 date >= loadStart &&
                 date <= trip.end_date;
         });
@@ -1662,10 +1936,11 @@ app.get(`${MCP_BASE}/travel/currency-mix`, async (req, res) => {
         // Filter txns for trip
         const tripTxns = txns.filter(t => {
             const date = parseDate(t.Txn_Date);
+            const txnType = (t.transactionType_dsc || '').toUpperCase();
             return t.country === trip.country &&
                 date >= trip.start_date &&
                 date <= trip.end_date &&
-                t.transactionType_dsc !== 'Load';
+                txnType !== 'LOAD';
         });
 
         const currencyMap = {};
@@ -1844,12 +2119,14 @@ app.get(`${MCP_BASE}/remittance/trend`, async (req, res) => {
  * /api/mcp/remittance/search:
  *   get:
  *     summary: Search remittance transactions
+ *     description: Search by transaction ID, payment mode, payment type, or amount
  *     tags: [Remittance]
  *     parameters:
  *       - in: query
  *         name: query
  *         required: true
  *         schema: { type: string }
+ *         description: Search term - matches transaction ID, payment mode, payment type, or amount
  *       - in: query
  *         name: limit
  *         schema: { type: integer, default: 5 }
@@ -1865,19 +2142,31 @@ app.get(`${MCP_BASE}/remittance/search`, async (req, res) => {
         const lowerQ = query.toLowerCase();
         const txns = await getMcpData('remittance');
 
+        // Search across multiple fields: transactionid, paymentmode, paymenttype, pgreferenceid, amount
         const matches = txns.filter(t =>
-            (t.purpose_of_payment || '').toLowerCase().includes(lowerQ) ||
-            (t.beneficiary_name || '').toLowerCase().includes(lowerQ)
+            (t.transactionid || '').toLowerCase().includes(lowerQ) ||
+            (t.pgreferenceid || '').toLowerCase().includes(lowerQ) ||
+            (t.paymentmode || '').toLowerCase().includes(lowerQ) ||
+            (t.paymenttype || '').toLowerCase().includes(lowerQ) ||
+            (t.biller_name || '').toLowerCase().includes(lowerQ) ||
+            String(t.amount || '').includes(lowerQ) ||
+            String(t.total_amount_in_BHD || '').includes(lowerQ)
         );
 
         res.json({
             success: true,
             tool: 'remittance_search',
+            query: query,
+            count: matches.length,
             matches: matches.slice(0, parseInt(limit)).map(t => ({
                 date: t.timestamp_created,
-                beneficiary: t.beneficiary_name,
-                amount: t.total_amount_in_BHD,
-                purpose: t.purpose_of_payment
+                transaction_id: t.transactionid,
+                reference: t.pgreferenceid,
+                payment_mode: t.paymentmode,
+                payment_type: t.paymenttype,
+                amount: t.amount,
+                total_bhd: t.total_amount_in_BHD,
+                status: t.status ? 'Completed' : 'Pending'
             }))
         });
     } catch (error) {
@@ -2010,17 +2299,34 @@ app.get(`${MCP_BASE}/rewards/activity`, async (req, res) => {
             return true;
         });
 
+        // Helper to format date properly
+        const formatDate = (rawDate) => {
+            const date = parseDate(rawDate);
+            if (!date || isNaN(date.getTime())) return null;
+            // Format as YYYY-MM-DD HH:mm:ss
+            const pad = (n) => String(n).padStart(2, '0');
+            return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+        };
+
         // Map to standard format
-        const standardActivity = activity.map(r => ({
-            date: r.Created_At || r.Txn_Date || r.Date || r.timestamp,
-            description: r.Description || r.Txn_Det || r.Event || 'Reward',
-            amount: parseAmount(r.Points || r.BHD_Amount || r.Amount || r.amount),
-            type: (r._sheet || '').toLowerCase().includes('point') ? 'Points' : 'Cashback'
-        })).sort((a, b) => parseDate(b.date) - parseDate(a.date));
+        const standardActivity = activity.map(r => {
+            const rawDate = r.Created_At || r.Txn_Date || r.Date || r.timestamp;
+            return {
+                date: formatDate(rawDate) || rawDate, // Format the date, fallback to raw if parsing fails
+                description: r.Description || r.Txn_Det || r.Event || 'Reward',
+                amount: parseAmount(r.Points || r.BHD_Amount || r.Amount || r.amount),
+                type: (r._sheet || '').toLowerCase().includes('point') ? 'Points' : 'Cashback'
+            };
+        }).sort((a, b) => {
+            const dateA = parseDate(a.date);
+            const dateB = parseDate(b.date);
+            return (dateB || 0) - (dateA || 0);
+        });
 
         res.json({
             success: true,
             tool: 'rewards_activity',
+            period: dateRange.label,
             count: standardActivity.length,
             activity: standardActivity.slice(0, 50)
         });
@@ -2137,8 +2443,8 @@ app.get(`${MCP_BASE}/finance/savings-rate`, async (req, res) => {
             if (dateRange.start && date < dateRange.start) return;
             if (dateRange.end && date > dateRange.end) return;
 
-            const amt = parseAmount(t.transaction_amount);
-            if (t.credit_debit === 'Credit' || t.credit_debit === 'C') income += amt;
+            const amt = getTxnAmount(t);
+            if (isCredit(t)) income += amt;
             else expense += amt;
         });
 
@@ -2186,12 +2492,12 @@ app.get(`${MCP_BASE}/finance/predict`, async (req, res) => {
             if (t.credit_debit !== 'Debit' && t.credit_debit !== 'D') return false;
 
             if (category) {
-                return (t.mcc_description || '').toLowerCase().includes(category.toLowerCase());
+                return (t.MCC_Category || t.mcc_description || '').toLowerCase().includes(category.toLowerCase());
             }
             return true;
         });
 
-        const total = recentTxns.reduce((sum, t) => sum + parseAmount(t.transaction_amount), 0);
+        const total = recentTxns.reduce((sum, t) => sum + getTxnAmount(t), 0);
         const monthlyAvg = total / 3;
 
         res.json({
@@ -2298,8 +2604,8 @@ app.get(`${MCP_BASE}/utility/balance`, async (req, res) => {
         let balance = 0;
 
         txns.forEach(t => {
-            const amt = parseAmount(t.transaction_amount);
-            if (t.credit_debit === 'Credit' || t.credit_debit === 'C') balance += amt;
+            const amt = getTxnAmount(t);
+            if (isCredit(t)) balance += amt;
             else balance -= amt;
         });
 
@@ -3036,30 +3342,6 @@ app.listen(port, () => {
     console.log(`  URL: ${REDIS_URL}`);
     console.log(`  Database: ${REDIS_DB}`);
     console.log(`  Cache Expiry: 60 days (2 months)`);
-    console.log('\n📊 DATA APIs (with Redis caching):');
-    console.log('  GET /api/remittance        - Get remittance history');
-    console.log('  GET /api/transactions      - Get transaction history');
-    console.log('  GET /api/rewards           - Get rewards history');
-    console.log('  GET /api/travelbuddy       - Get TravelBuddy history');
-    console.log('  GET /api/all               - Get all data');
-    console.log('  GET /api/sheets            - Get sheet info');
-    console.log('  GET /api/health            - Health check');
-    console.log('\n🗄️ CACHE APIs:');
-    console.log('  GET    /api/cache/info     - Get cache statistics');
-    console.log('  POST   /api/cache/warmup   - Pre-load all data into cache');
-    console.log('  DELETE /api/cache          - Clear cache (optional ?pattern=)');
-    console.log('\n📈 ANALYTICS APIs:');
-    console.log('  GET /api/analytics/remittance/summary    - Remittance summary with date filter');
-    console.log('  GET /api/analytics/transactions/summary  - Transaction summary with date filter');
-    console.log('  GET /api/analytics/rewards/summary       - Rewards summary');
-    console.log('  GET /api/analytics/travelbuddy/summary   - TravelBuddy summary');
-    console.log('  GET /api/analytics/dashboard             - Complete dashboard');
-    console.log('  GET /api/analytics/monthly               - Monthly breakdown');
-    console.log('  GET /api/analytics/by-type               - Group by transaction type');
-    console.log('  GET /api/analytics/by-country            - Group by country');
-    console.log('  GET /api/analytics/by-category           - Group by MCC category');
-    console.log('  GET /api/analytics/flyy-points           - Flyy points analytics');
-    console.log('  GET /api/analytics/card-usage            - Card usage analytics');
     console.log('\nExcel files being used:');
     Object.entries(EXCEL_FILES).forEach(([key, path]) => {
         console.log(`  ${key}: ${path}`);
@@ -3167,9 +3449,9 @@ app.get('/api/analytics/transactions/summary', async (req, res) => {
             item.credit_debit && item.credit_debit.toLowerCase() === credit_debit.toLowerCase()
         );
 
-        // Calculate summary
-        const credits = data.filter(item => item.credit_debit === 'Credit');
-        const debits = data.filter(item => item.credit_debit === 'Debit');
+        // Calculate summary (case-insensitive)
+        const credits = data.filter(item => isCredit(item));
+        const debits = data.filter(item => isDebit(item));
 
         const totalCredits = credits.reduce((sum, item) => sum + Math.abs(parseFloat(item['Transacted_Amount_in_BHD']) || 0), 0);
         const totalDebits = debits.reduce((sum, item) => sum + Math.abs(parseFloat(item['Transacted_Amount_in_BHD']) || 0), 0);
@@ -3184,7 +3466,7 @@ app.get('/api/analytics/transactions/summary', async (req, res) => {
             }
             byTransactionType[type].count++;
             byTransactionType[type].total_amount_bhd += Math.abs(parseFloat(item['Transacted_Amount_in_BHD']) || 0);
-            if (item.credit_debit === 'Credit') byTransactionType[type].credits++;
+            if (isCredit(item)) byTransactionType[type].credits++;
             else byTransactionType[type].debits++;
         });
 
@@ -3279,7 +3561,12 @@ app.get('/api/analytics/rewards/summary', async (req, res) => {
         // By MCC category
         const byCategory = {};
         filteredTxns.forEach(item => {
-            const cat = item.MCC_Category || 'Unknown';
+            let cat = item.MCC_Category;
+            if (!cat || typeof cat === 'object') {
+                cat = 'Unknown';
+            } else {
+                cat = String(cat).trim();
+            }
             if (!byCategory[cat]) {
                 byCategory[cat] = { count: 0, total_bhd: 0 };
             }
@@ -3295,10 +3582,10 @@ app.get('/api/analytics/rewards/summary', async (req, res) => {
                 total_transactions: filteredTxns.length,
                 total_spent_bhd: parseFloat(totalSpent.toFixed(3)),
                 total_markup_bhd: parseFloat(totalMarkup.toFixed(3)),
-                domestic_count: filteredTxns.filter(i => i['Domestic_International'] === 'Domestic').length,
-                international_count: filteredTxns.filter(i => i['Domestic_International'] === 'International').length,
-                pos_count: filteredTxns.filter(i => i.transactionType_dsc === 'POS').length,
-                ecom_count: filteredTxns.filter(i => i.transactionType_dsc === 'ECOM').length
+                domestic_count: filteredTxns.filter(i => (i['Domestic_International'] || '').toUpperCase() === 'DOMESTIC').length,
+                international_count: filteredTxns.filter(i => (i['Domestic_International'] || '').toUpperCase() === 'INTERNATIONAL').length,
+                pos_count: filteredTxns.filter(i => (i.transactionType_dsc || '').toUpperCase() === 'POS').length,
+                ecom_count: filteredTxns.filter(i => (i.transactionType_dsc || '').toUpperCase() === 'ECOM').length
             },
             load_summary: {
                 total_loads: filteredLoads.length,
@@ -3431,9 +3718,9 @@ app.get('/api/analytics/dashboard', async (req, res) => {
 
         // Calculate totals
         const remittanceTotal = remittance.reduce((sum, i) => sum + (parseFloat(i['total_amount_in_BHD']) || 0), 0);
-        const txnCredits = transactions.filter(i => i.credit_debit === 'Credit')
+        const txnCredits = transactions.filter(i => isCredit(i))
             .reduce((sum, i) => sum + Math.abs(parseFloat(i['Transacted_Amount_in_BHD']) || 0), 0);
-        const txnDebits = transactions.filter(i => i.credit_debit === 'Debit')
+        const txnDebits = transactions.filter(i => isDebit(i))
             .reduce((sum, i) => sum + Math.abs(parseFloat(i['Transacted_Amount_in_BHD']) || 0), 0);
         const rewardsSpent = rewardsTxns.reduce((sum, i) => sum + (parseFloat(i.BHD_Amount) || 0), 0);
         const rewardsLoaded = rewardsLoads.reduce((sum, i) => sum + (parseFloat(i.BHD_Amount) || 0), 0);
@@ -3577,7 +3864,7 @@ app.get('/api/analytics/by-type', async (req, res) => {
             byType[type].count++;
             const amount = Math.abs(parseFloat(item['Transacted_Amount_in_BHD']) || 0);
             byType[type].total_bhd += amount;
-            if (item.credit_debit === 'Credit') {
+            if (isCredit(item)) {
                 byType[type].credits++;
                 byType[type].credit_amount += amount;
             } else {
@@ -3635,8 +3922,9 @@ app.get('/api/analytics/by-country', async (req, res) => {
             byCountry[country].count++;
             byCountry[country].total_bhd += parseFloat(item.BHD_Amount) || 0;
             byCountry[country].total_markup += parseFloat(item.Markup) || 0;
-            if (item.transactionType_dsc === 'POS') byCountry[country].pos_count++;
-            if (item.transactionType_dsc === 'ECOM') byCountry[country].ecom_count++;
+            const txnType = (item.transactionType_dsc || '').toUpperCase();
+            if (txnType === 'POS') byCountry[country].pos_count++;
+            if (txnType === 'ECOM') byCountry[country].ecom_count++;
         });
 
         // Round and sort by count
@@ -3666,7 +3954,7 @@ app.get('/api/analytics/by-country', async (req, res) => {
 // 9. Group by MCC Category
 app.get('/api/analytics/by-category', async (req, res) => {
     try {
-        const { start_date, end_date, source } = req.query;
+        const { start_date, end_date, source, period } = req.query;
 
         let data = [];
         if (source === 'travelbuddy') {
@@ -3675,13 +3963,30 @@ app.get('/api/analytics/by-category', async (req, res) => {
             data = await readExcelSheet(EXCEL_FILES.rewards, 'Transactions');
         }
 
-        if (start_date || end_date) {
+        // Support both period parameter and start_date/end_date
+        let dateRange = null;
+        if (period) {
+            dateRange = parsePeriod(period);
+            data = data.filter(item => {
+                const itemDate = parseDate(item.Txn_Date);
+                if (!itemDate) return false;
+                if (dateRange.start && itemDate < dateRange.start) return false;
+                if (dateRange.end && itemDate > dateRange.end) return false;
+                return true;
+            });
+        } else if (start_date || end_date) {
             data = data.filter(item => isDateInRange(item.Txn_Date, start_date, end_date));
         }
 
         const byCategory = {};
         data.forEach(item => {
-            const category = item.MCC_Category || 'Unknown';
+            // Handle case where MCC_Category might be an object or invalid value
+            let category = item.MCC_Category;
+            if (!category || typeof category === 'object') {
+                category = 'Unknown';
+            } else {
+                category = String(category).trim();
+            }
             if (!byCategory[category]) {
                 byCategory[category] = {
                     count: 0,
@@ -3709,7 +4014,12 @@ app.get('/api/analytics/by-category', async (req, res) => {
         res.json({
             success: true,
             message: "Category breakdown fetched successfully",
-            filters_applied: { start_date, end_date, source: source || 'rewards' },
+            filters_applied: { 
+                period: period ? (dateRange ? dateRange.label : period) : null,
+                start_date, 
+                end_date, 
+                source: source || 'rewards' 
+            },
             total_categories: sorted.length,
             by_category: sorted
         });
