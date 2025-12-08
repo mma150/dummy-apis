@@ -33,6 +33,32 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 
 app.use(express.json());
 
+// Request logging middleware
+app.use((req, res, next) => {
+    const startTime = Date.now();
+    const timestamp = new Date().toISOString();
+    
+    // Log request
+    console.log(`\n📥 [${timestamp}] ${req.method} ${req.originalUrl}`);
+    if (Object.keys(req.query).length > 0) {
+        console.log(`   Query: ${JSON.stringify(req.query)}`);
+    }
+    if (req.body && Object.keys(req.body).length > 0) {
+        console.log(`   Body: ${JSON.stringify(req.body)}`);
+    }
+    
+    // Capture response
+    const originalSend = res.send;
+    res.send = function(data) {
+        const duration = Date.now() - startTime;
+        const statusEmoji = res.statusCode >= 400 ? '❌' : '✅';
+        console.log(`${statusEmoji} [${timestamp}] ${req.method} ${req.originalUrl} - ${res.statusCode} (${duration}ms)`);
+        return originalSend.call(this, data);
+    };
+    
+    next();
+});
+
 // Excel password
 const EXCEL_PASSWORD = 'BFCxMobi@2468';
 
