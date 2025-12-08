@@ -9,9 +9,7 @@
       "properties": {
         "period": {
           "type": "string",
-          "description": "Time period for the summary (yesterday, week, month, last_month, year, or empty for all time)",
-          "enum": ["yesterday", "week", "month", "last_month", "year"]
-        }
+          "description": "Time period for the summary (yesterday, week, month, last_month, year, or empty for all time)"        }
       },
       "required": []
     },
@@ -30,8 +28,7 @@
       "properties": {
         "period": {
           "type": "string",
-          "description": "Time period for the breakdown (yesterday, week, month, last_month, year)",
-          "enum": ["yesterday", "week", "month", "last_month", "year"]
+          "description": "Time period for the breakdown (yesterday, week, month, last_month, year)"
         }
       },
       "required": []
@@ -51,8 +48,7 @@
       "properties": {
         "period": {
           "type": "string",
-          "description": "Time period for the analysis",
-          "enum": ["yesterday", "week", "month", "last_month", "year"]
+          "description": "Time period for the analysis"
         },
         "limit": {
           "type": "integer",
@@ -108,9 +104,7 @@
         },
         "period": {
           "type": "string",
-          "description": "Time period to search within",
-          "enum": ["yesterday", "week", "month", "last_month", "year"]
-        }
+          "description": "Time period to search within"        }
       },
       "required": ["query"]
     },
@@ -144,8 +138,7 @@
       "properties": {
         "period": {
           "type": "string",
-          "description": "Time period for daily breakdown (default: week)",
-          "enum": ["yesterday", "week", "month", "last_month", "year"]
+          "description": "Time period for daily breakdown (default: week)"
         }
       },
       "required": []
@@ -169,8 +162,7 @@
         },
         "period": {
           "type": "string",
-          "description": "Time period for the analysis",
-          "enum": ["yesterday", "week", "month", "last_month", "year"]
+          "description": "Time period for the analysis"
         }
       },
       "required": ["category"]
@@ -190,8 +182,7 @@
       "properties": {
         "period": {
           "type": "string",
-          "description": "Time period to analyze for unusual activity",
-          "enum": ["yesterday", "week", "month", "last_month", "year"]
+          "description": "Time period to analyze for unusual activity"
         }
       },
       "required": []
@@ -433,8 +424,7 @@
       "properties": {
         "period": {
           "type": "string",
-          "description": "Time period for activity history",
-          "enum": ["yesterday", "week", "month", "last_month", "year"]
+          "description": "Time period for activity history"
         }
       },
       "required": []
@@ -489,8 +479,7 @@
       "properties": {
         "period": {
           "type": "string",
-          "description": "Time period for analysis (default: month)",
-          "enum": ["yesterday", "week", "month", "last_month", "year"]
+          "description": "Time period for analysis (default: month)"
         }
       },
       "required": []
@@ -586,32 +575,6 @@
       "Content-Type": "application/json"
     },
     "queryParams": []
-  },
-  {
-    "name": "download_report",
-    "description": "Generate and get download URL for financial report",
-    "endpoint": "https://dummy-api.omnikit.live/api/mcp/utility/report",
-    "method": "GET",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "period": {
-          "type": "string",
-          "description": "Time period for the report",
-          "enum": ["week", "month", "last_month", "year"]
-        },
-        "format": {
-          "type": "string",
-          "description": "Report format (pdf or excel)",
-          "enum": ["pdf", "excel"]
-        }
-      },
-      "required": []
-    },
-    "headers": {
-      "Content-Type": "application/json"
-    },
-    "queryParams": ["period", "format"]
   },
   {
     "name": "explain_category",
