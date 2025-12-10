@@ -6,6 +6,12 @@ const xlsx = require('xlsx');
 const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
 
+// Import route files
+const initRemittanceRoutes = require('./routes/remittance');
+const initTransactionsRoutes = require('./routes/transactions');
+const initRewardsRoutes = require('./routes/rewards');
+const initTravelBuddyRoutes = require('./routes/travelbuddy');
+
 const app = express();
 const port = process.env.PORT || 9191;
 
@@ -90,7 +96,7 @@ async function autoWarmupCache() {
 
     try {
         // Check if cache already has data (avoid redundant warmup)
-        const testKey = 'dummy-apis:transactions:0-0:default:all=true';
+        const testKey = 'transactions:sheet1';
         const existing = await redisClient.get(testKey);
         if (existing) {
             console.log('✅ Cache already warm, skipping warmup');
@@ -101,7 +107,7 @@ async function autoWarmupCache() {
         const warmupPromises = [
             (async () => {
                 const data = await readExcelSheet(EXCEL_FILES.remittance);
-                await setToCache('dummy-apis:remittance:0-0:default:all=true', {
+                await setToCache('remittance:sheet1', {
                     success: true,
                     message: "Remittance history fetched successfully",
                     filter_period: 'All Time',
@@ -113,7 +119,7 @@ async function autoWarmupCache() {
             })(),
             (async () => {
                 const data = await readExcelSheet(EXCEL_FILES.transactions);
-                await setToCache('dummy-apis:transactions:0-0:default:all=true', {
+                await setToCache('transactions:sheet1', {
                     success: true,
                     message: "Transaction history fetched successfully",
                     filter_period: 'All Time',
@@ -132,9 +138,11 @@ async function autoWarmupCache() {
             // Rewards - cache each sheet separately
             (async () => {
                 let totalRecords = 0;
+                const sheetKeyMap = { 'Transactions': 'transactions', 'Load': 'load', 'Flyy points': 'flyypoints' };
                 for (const sheetName of ['Transactions', 'Load', 'Flyy points']) {
                     const data = await readExcelSheet(EXCEL_FILES.rewards, sheetName);
-                    await setToCache(`dummy-apis:rewards:0-0:${sheetName}:all=true`, {
+                    const cacheKey = `rewardhistory:${sheetKeyMap[sheetName]}`;
+                    await setToCache(cacheKey, {
                         success: true,
                         sheet: sheetName,
                         total_records: data.length,
@@ -147,9 +155,11 @@ async function autoWarmupCache() {
             // TravelBuddy - cache each sheet separately
             (async () => {
                 let totalRecords = 0;
+                const sheetKeyMap = { 'Transactions': 'transactions', 'Load': 'load' };
                 for (const sheetName of ['Transactions', 'Load']) {
                     const data = await readExcelSheet(EXCEL_FILES.travelbuddy, sheetName);
-                    await setToCache(`dummy-apis:travelbuddy:0-0:${sheetName}:all=true`, {
+                    const cacheKey = `travelbuddy:${sheetKeyMap[sheetName]}`;
+                    await setToCache(cacheKey, {
                         success: true,
                         sheet: sheetName,
                         total_records: data.length,
@@ -200,15 +210,18 @@ const EXCEL_FILES = {
 // HELPER FUNCTIONS
 // ============================================
 
-// Generate cache key based on month-year-sheetName pattern
-function generateCacheKey(prefix, month, year, sheetName = 'default', additionalParams = {}) {
-    const baseKey = `dummy-apis:${prefix}:${year}-${month}:${sheetName}`;
-    const paramStr = Object.keys(additionalParams)
-        .filter(k => additionalParams[k] !== undefined && additionalParams[k] !== null)
-        .sort()
-        .map(k => `${k}=${additionalParams[k]}`)
-        .join(':');
-    return paramStr ? `${baseKey}:${paramStr}` : baseKey;
+// Sheet name to key mapping
+const SHEET_KEY_MAP = {
+    'Transactions': 'transactions',
+    'Load': 'load',
+    'Flyy points': 'flyypoints',
+    'default': 'sheet1'
+};
+
+// Generate cache key based on file:sheet pattern
+function generateCacheKey(fileType, sheetName = 'default') {
+    const sheetKey = SHEET_KEY_MAP[sheetName] || sheetName.toLowerCase().replace(/\s+/g, '');
+    return `${fileType}:${sheetKey}`;
 }
 
 // Get data from cache
@@ -284,8 +297,9 @@ function setToMemoryCache(key, data) {
 
 // Helper to get single sheet data (memory -> Redis -> file)
 async function getSheetData(fileType, sheetName, filePath) {
-    const memKey = `mem:${fileType}:${sheetName}`;
-    const redisKey = `dummy-apis:${fileType}:0-0:${sheetName}:all=true`;
+    const sheetKey = SHEET_KEY_MAP[sheetName] || sheetName.toLowerCase().replace(/\s+/g, '');
+    const memKey = `mem:${fileType}:${sheetKey}`;
+    const redisKey = `${fileType}:${sheetKey}`;
     
     // 1. Check memory cache first (fastest)
     const memCached = getFromMemoryCache(memKey);
@@ -924,8 +938,8 @@ async function getMcpData(dataType) {
 
     // Cache key mapping for smaller files
     const CACHE_KEYS = {
-        remittance: 'dummy-apis:remittance:0-0:default:all=true',
-        transactions: 'dummy-apis:transactions:0-0:default:all=true'
+        remittance: 'remittance:sheet1',
+        transactions: 'transactions:sheet1'
     };
 
     const cacheKey = CACHE_KEYS[dataType];
@@ -2729,6 +2743,50 @@ app.get(`${MCP_BASE}/utility/explain-category`, async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+
+// ============================================
+// INITIALIZE AND MOUNT ROUTE FILES
+// ============================================
+
+// Helper dependencies to pass to route files
+const routeHelpers = {
+    EXCEL_FILES,
+    readExcelSheet,
+    getSheetNames,
+    readAllExcelSheets,
+    parseDate,
+    parsePeriod,
+    parseAmount,
+    isDateInMonth,
+    isDateInRange,
+    getMonthFilter,
+    getMonthName,
+    calculateStats,
+    getMcpData,
+    getFromCache,
+    setToCache,
+    generateCacheKey
+};
+
+// Initialize route files with helpers
+const remittanceRouter = initRemittanceRoutes(routeHelpers);
+const transactionsRouter = initTransactionsRoutes(routeHelpers);
+const rewardsRouter = initRewardsRoutes(routeHelpers);
+const travelBuddyRouter = initTravelBuddyRoutes(routeHelpers);
+
+// Mount routes
+// NOTE: The routes below are LEGACY - kept for backward compatibility
+// New route files are mounted here but currently not active to avoid conflicts
+// To activate new routes, uncomment below and remove corresponding legacy routes:
+// app.use('/api/remittance', remittanceRouter);
+// app.use('/api/transactions', transactionsRouter);
+// app.use('/api/rewards', rewardsRouter);
+// app.use('/api/travelbuddy', travelBuddyRouter);
+
+// ============================================
+// DATA API ENDPOINTS (Legacy - to be migrated to route files)
+// ============================================
+
 app.get('/api/remittance', async (req, res) => {
     try {
         const { cpr, paymentmode, status } = req.query;
@@ -3143,7 +3201,7 @@ app.get('/api/health', async (req, res) => {
 app.delete('/api/cache', async (req, res) => {
     try {
         const { pattern } = req.query;
-        const searchPattern = pattern ? `dummy-apis:${pattern}*` : 'dummy-apis:*';
+        const searchPattern = pattern ? `${pattern}*` : '*';
 
         await clearCacheByPattern(searchPattern);
 
@@ -3323,14 +3381,22 @@ app.get('/api/cache/info', async (req, res) => {
             });
         }
 
-        const keys = await redisClient.keys('dummy-apis:*');
+        const keys = await redisClient.keys('*');
+        
+        // Filter to only show our app's keys (exclude system keys)
+        const appKeys = keys.filter(k => 
+            k.startsWith('remittance:') || 
+            k.startsWith('transactions:') || 
+            k.startsWith('rewardhistory:') || 
+            k.startsWith('travelbuddy:')
+        );
 
         res.json({
             success: true,
             connected: true,
-            total_cached_keys: keys.length,
+            total_cached_keys: appKeys.length,
             cache_expiry_days: 60,
-            keys: keys.slice(0, 50) // Return first 50 keys
+            keys: appKeys
         });
     } catch (error) {
         res.status(500).json({
