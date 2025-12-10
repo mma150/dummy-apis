@@ -12,6 +12,7 @@ RUN npm install --omit=dev
 
 # Copy application files
 COPY server.js ./
+COPY routes/ ./routes/
 
 # Copy Excel files (data source)
 COPY "remittance.xlsx" ./
