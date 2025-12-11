@@ -1189,6 +1189,211 @@ app.get(`${MCP_BASE}/spend/summary`, async (req, res) => {
     }
 });
 
+// 1b. Detailed Spend Breakdown (comprehensive view)
+/**
+ * @swagger
+ * /api/mcp/spend/detailed-breakdown:
+ *   get:
+ *     summary: Get comprehensive detailed spending breakdown
+ *     description: Returns complete spending breakdown including summary, categories, top merchants, and daily timeline in one call.
+ *     tags: [Spending]
+ *     parameters:
+ *       - in: query
+ *         name: type
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [transactions, travelbuddy]
+ *         description: Data source - 'transactions' for main wallet or 'travelbuddy' for travel card
+ *       - in: query
+ *         name: period
+ *         schema:
+ *           type: string
+ *         description: Time period for the breakdown (e.g., october_2025, last_month)
+ *     responses:
+ *       200:
+ *         description: Comprehensive spending breakdown
+ */
+app.get(`${MCP_BASE}/spend/detailed-breakdown`, async (req, res) => {
+    try {
+        const { period, type } = req.query;
+        
+        // Validate type parameter
+        if (!type || !['transactions', 'travelbuddy'].includes(type)) {
+            return res.status(400).json({
+                success: false,
+                error: "Parameter 'type' is required. Use 'transactions' or 'travelbuddy'."
+            });
+        }
+        
+        const dateRange = parsePeriod(period);
+        
+        let totalSpent = 0;
+        let totalIncome = 0;
+        let txnCount = 0;
+        const categoryMap = {};
+        const merchantMap = {};
+        const dailyStats = {};
+        const transactionTypes = {};
+
+        if (type === 'transactions') {
+            const txns = await getMcpData('transactions');
+            
+            // Filter debits (spending)
+            const debitTxns = txns.filter(t => isDebit(t));
+            const filteredDebits = filterByDate(debitTxns, dateRange, 'transaction_date_time');
+            
+            filteredDebits.forEach(t => {
+                const amt = Math.abs(getTxnAmount(t));
+                totalSpent += amt;
+                txnCount++;
+                
+                // Category breakdown
+                let cat = t.MCC_Category || t.mcc_description || t.transaction_type || 'Uncategorized';
+                if (!cat || typeof cat === 'object') cat = 'Uncategorized';
+                cat = String(cat).trim();
+                if (cat.length < 3) cat = 'General';
+                if (!categoryMap[cat]) categoryMap[cat] = { amount: 0, count: 0 };
+                categoryMap[cat].amount += amt;
+                categoryMap[cat].count++;
+                
+                // Merchant breakdown
+                let merchant = t.description || t.merchant_name || t.transaction_description || 'Unknown';
+                merchant = String(merchant).trim();
+                if (!merchant || merchant === '') merchant = 'Unknown';
+                if (!merchantMap[merchant]) merchantMap[merchant] = { amount: 0, count: 0 };
+                merchantMap[merchant].amount += amt;
+                merchantMap[merchant].count++;
+                
+                // Daily breakdown
+                const date = parseDate(t.transaction_date_time);
+                if (date) {
+                    const key = date.toISOString().split('T')[0];
+                    if (!dailyStats[key]) dailyStats[key] = 0;
+                    dailyStats[key] += amt;
+                }
+                
+                // Transaction type breakdown
+                const txnType = t.transaction_type || 'OTHER';
+                if (!transactionTypes[txnType]) transactionTypes[txnType] = { amount: 0, count: 0 };
+                transactionTypes[txnType].amount += amt;
+                transactionTypes[txnType].count++;
+            });
+            
+            // Calculate income (credits)
+            const creditTxns = txns.filter(t => isCredit(t));
+            const filteredCredits = filterByDate(creditTxns, dateRange, 'transaction_date_time');
+            filteredCredits.forEach(t => totalIncome += getTxnAmount(t));
+            
+        } else if (type === 'travelbuddy') {
+            const travelTxns = await getMcpData('travelbuddy');
+            
+            // Filter spend transactions (not loads)
+            const spendTxns = travelTxns.filter(t => !isLoad(t) && getTxnAmount(t) > 0);
+            const filtered = filterByDate(spendTxns, dateRange, 'Txn_Date');
+            
+            filtered.forEach(t => {
+                const amt = Math.abs(getTxnAmount(t));
+                totalSpent += amt;
+                txnCount++;
+                
+                // Category breakdown
+                let cat = t.mcc_category || t.MCC_Category || t.mcc_name || 'Uncategorized';
+                if (!cat || typeof cat === 'object') cat = 'Uncategorized';
+                cat = String(cat).trim();
+                if (cat.length < 3) cat = 'General';
+                if (!categoryMap[cat]) categoryMap[cat] = { amount: 0, count: 0 };
+                categoryMap[cat].amount += amt;
+                categoryMap[cat].count++;
+                
+                // Merchant breakdown
+                let merchant = t.otherPartyName || t.merchant_name || t.description || 'Unknown';
+                merchant = String(merchant).trim();
+                if (!merchant || merchant === '') merchant = 'Unknown';
+                if (!merchantMap[merchant]) merchantMap[merchant] = { amount: 0, count: 0 };
+                merchantMap[merchant].amount += amt;
+                merchantMap[merchant].count++;
+                
+                // Daily breakdown
+                const date = parseDate(t.Txn_Date);
+                if (date) {
+                    const key = date.toISOString().split('T')[0];
+                    if (!dailyStats[key]) dailyStats[key] = 0;
+                    dailyStats[key] += amt;
+                }
+                
+                // Transaction type breakdown
+                const txnType = t.transactionType_dsc || 'OTHER';
+                if (!transactionTypes[txnType]) transactionTypes[txnType] = { amount: 0, count: 0 };
+                transactionTypes[txnType].amount += amt;
+                transactionTypes[txnType].count++;
+            });
+            
+            // Calculate loads as income
+            const loadTxns = travelTxns.filter(t => isLoad(t) && getTxnAmount(t) > 0);
+            const filteredLoads = filterByDate(loadTxns, dateRange, 'Txn_Date');
+            filteredLoads.forEach(t => totalIncome += getTxnAmount(t));
+        }
+
+        // Format categories (top 10)
+        const categories = Object.entries(categoryMap)
+            .map(([category, stats]) => ({
+                category,
+                amount: Math.round(stats.amount * 100) / 100,
+                transaction_count: stats.count,
+                percentage: Math.round((stats.amount / totalSpent) * 100)
+            }))
+            .sort((a, b) => b.amount - a.amount)
+            .slice(0, 10);
+
+        // Format merchants (top 10)
+        const merchants = Object.entries(merchantMap)
+            .map(([name, stats]) => ({
+                merchant: name,
+                amount: Math.round(stats.amount * 100) / 100,
+                transaction_count: stats.count
+            }))
+            .sort((a, b) => b.amount - a.amount)
+            .slice(0, 10);
+
+        // Format daily timeline
+        const dailyTimeline = Object.entries(dailyStats)
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([date, amount]) => ({
+                date,
+                amount: Math.round(amount * 100) / 100
+            }));
+
+        // Format transaction types
+        const txnTypes = Object.entries(transactionTypes)
+            .map(([type, stats]) => ({
+                type,
+                amount: Math.round(stats.amount * 100) / 100,
+                count: stats.count
+            }))
+            .sort((a, b) => b.amount - a.amount);
+
+        res.json({
+            success: true,
+            tool: 'spend_detailed_breakdown',
+            period: dateRange.label,
+            type: type,
+            summary: {
+                total_spent: Math.round(totalSpent * 100) / 100,
+                total_income: Math.round(totalIncome * 100) / 100,
+                net: Math.round((totalIncome - totalSpent) * 100) / 100,
+                transaction_count: txnCount
+            },
+            by_category: categories,
+            top_merchants: merchants,
+            by_transaction_type: txnTypes,
+            daily_timeline: dailyTimeline
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // 2. Spend By Category
 /**
  * @swagger
