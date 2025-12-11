@@ -2666,37 +2666,122 @@ app.get(`${MCP_BASE}/remittance/fx-rate`, async (req, res) => {
  *   get:
  *     summary: Get rewards summary
  *     tags: [Rewards]
+ *     parameters:
+ *       - in: query
+ *         name: type
+ *         schema: { type: string }
+ *         description: Sheet type (transactions, load, flyy_points, or all for combined)
+ *       - in: query
+ *         name: period
+ *         schema: { type: string }
+ *         description: Time period filter
  *     responses:
  *       200:
  *         description: Points and cashback summary
  */
 app.get(`${MCP_BASE}/rewards/summary`, async (req, res) => {
     try {
-        const rewards = await getMcpData('rewards');
+        const { type, period } = req.query;
+        const dateRange = parsePeriod(period);
+
+        // Get all sheet names from rewards file
+        const sheetNames = await getSheetNames(EXCEL_FILES.rewards);
+        
+        // Map type parameter to sheet name
+        const typeToSheet = {
+            'transactions': 'Transactions',
+            'load': 'Load',
+            'flyy_points': 'Flyy points',
+            'flyypoints': 'Flyy points'
+        };
+
+        let sheetsToRead = sheetNames;
+        if (type && type.toLowerCase() !== 'all') {
+            const targetSheet = typeToSheet[type.toLowerCase()];
+            if (targetSheet && sheetNames.includes(targetSheet)) {
+                sheetsToRead = [targetSheet];
+            }
+        }
 
         let totalPoints = 0;
         let totalCashback = 0;
+        let totalTransactions = 0;
+        let totalLoad = 0;
+        let recordCount = 0;
 
-        rewards.forEach(r => {
-            const sheet = (r._sheet || '').toLowerCase();
-            const amt = parseAmount(r.Points || r.BHD_Amount || r.Amount || r.amount);
-
-            if (sheet.includes('flyy') || sheet.includes('points')) {
-                totalPoints += amt;
-            } else {
-                totalCashback += amt; // BHD usually
+        // Read and process each sheet
+        for (const sheetName of sheetsToRead) {
+            let sheetData = await readExcelSheet(EXCEL_FILES.rewards, sheetName);
+            
+            // Apply date filter if period specified
+            if (dateRange.start || dateRange.end) {
+                const dateField = sheetName === 'Flyy points' ? 'Created_At' : 'Txn_Date';
+                sheetData = sheetData.filter(item => {
+                    const date = parseDate(item[dateField]);
+                    if (!date) return false;
+                    if (dateRange.start && date < dateRange.start) return false;
+                    if (dateRange.end && date > dateRange.end) return false;
+                    return true;
+                });
             }
-        });
+            
+            recordCount += sheetData.length;
 
-        res.json({
+            sheetData.forEach(r => {
+                const sheetKey = sheetName.toLowerCase();
+                
+                if (sheetKey.includes('flyy') || sheetKey.includes('points')) {
+                    const points = parseAmount(r.Points || 0);
+                    totalPoints += points;
+                } else if (sheetKey.includes('load')) {
+                    const amt = parseAmount(r.BHD_Amount || r.Amount || r.amount || 0);
+                    totalLoad += amt;
+                } else if (sheetKey.includes('transaction')) {
+                    const amt = parseAmount(r.BHD_Amount || r.Amount || r.amount || 0);
+                    totalTransactions += amt;
+                    totalCashback += amt;
+                }
+            });
+        }
+
+        // Build response based on type
+        let response = {
             success: true,
             tool: 'rewards_summary',
-            total_points: Math.round(totalPoints),
-            total_cashback_bhd: Math.round(totalCashback * 100) / 100,
-            // Mock tier
-            tier: totalPoints > 10000 ? 'Platinum' : (totalPoints > 5000 ? 'Gold' : 'Silver'),
-            next_tier_progress: 75 // Mock
-        });
+            type: type || 'all',
+            period: dateRange.label,
+            record_count: recordCount
+        };
+
+        if (!type || type.toLowerCase() === 'all') {
+            response.summary = {
+                total_points: Math.round(totalPoints),
+                total_cashback_bhd: Math.round(totalCashback * 100) / 100,
+                total_load_bhd: Math.round(totalLoad * 100) / 100,
+                total_transactions_bhd: Math.round(totalTransactions * 100) / 100
+            };
+            response.tier = totalPoints > 10000 ? 'Platinum' : (totalPoints > 5000 ? 'Gold' : 'Silver');
+            response.next_tier_progress = 75;
+        } else if (type.toLowerCase() === 'flyy_points' || type.toLowerCase() === 'flyypoints') {
+            response.summary = {
+                total_points: Math.round(totalPoints),
+                tier: totalPoints > 10000 ? 'Platinum' : (totalPoints > 5000 ? 'Gold' : 'Silver'),
+                next_tier_progress: 75
+            };
+        } else if (type.toLowerCase() === 'load') {
+            response.summary = {
+                total_load_bhd: Math.round(totalLoad * 100) / 100,
+                transaction_count: recordCount
+            };
+        } else if (type.toLowerCase() === 'transactions') {
+            response.summary = {
+                total_transactions_bhd: Math.round(totalTransactions * 100) / 100,
+                total_cashback_bhd: Math.round(totalCashback * 100) / 100,
+                transaction_count: recordCount
+            };
+        }
+
+        res.json(response);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -2711,6 +2796,10 @@ app.get(`${MCP_BASE}/rewards/summary`, async (req, res) => {
  *     tags: [Rewards]
  *     parameters:
  *       - in: query
+ *         name: type
+ *         schema: { type: string }
+ *         description: Sheet type (transactions, load, flyy_points, or all for combined)
+ *       - in: query
  *         name: period
  *         schema: { type: string }
  *     responses:
@@ -2719,41 +2808,87 @@ app.get(`${MCP_BASE}/rewards/summary`, async (req, res) => {
  */
 app.get(`${MCP_BASE}/rewards/activity`, async (req, res) => {
     try {
-        const { period } = req.query;
+        const { type, period } = req.query;
         const dateRange = parsePeriod(period);
 
-        const rewards = await getMcpData('rewards');
+        // Get all sheet names from rewards file
+        const sheetNames = await getSheetNames(EXCEL_FILES.rewards);
+        
+        // Map type parameter to sheet name
+        const typeToSheet = {
+            'transactions': 'Transactions',
+            'load': 'Load',
+            'flyy_points': 'Flyy points',
+            'flyypoints': 'Flyy points'
+        };
 
-        // Filter by date (look for various date fields)
-        const activity = rewards.filter(r => {
-            const dateStr = r.Created_At || r.Txn_Date || r.Date || r.timestamp;
-            const date = parseDate(dateStr);
-            if (!date) return false;
-
-            if (dateRange.start && date < dateRange.start) return false;
-            if (dateRange.end && date > dateRange.end) return false;
-            return true;
-        });
+        let sheetsToRead = sheetNames;
+        if (type && type.toLowerCase() !== 'all') {
+            const targetSheet = typeToSheet[type.toLowerCase()];
+            if (targetSheet && sheetNames.includes(targetSheet)) {
+                sheetsToRead = [targetSheet];
+            }
+        }
 
         // Helper to format date properly
         const formatDate = (rawDate) => {
             const date = parseDate(rawDate);
             if (!date || isNaN(date.getTime())) return null;
-            // Format as YYYY-MM-DD HH:mm:ss
             const pad = (n) => String(n).padStart(2, '0');
             return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
         };
 
-        // Map to standard format
-        const standardActivity = activity.map(r => {
-            const rawDate = r.Created_At || r.Txn_Date || r.Date || r.timestamp;
-            return {
-                date: formatDate(rawDate) || rawDate, // Format the date, fallback to raw if parsing fails
-                description: r.Description || r.Txn_Det || r.Event || 'Reward',
-                amount: parseAmount(r.Points || r.BHD_Amount || r.Amount || r.amount),
-                type: (r._sheet || '').toLowerCase().includes('point') ? 'Points' : 'Cashback'
-            };
-        }).sort((a, b) => {
+        let allActivity = [];
+
+        // Read and process each sheet
+        for (const sheetName of sheetsToRead) {
+            let sheetData = await readExcelSheet(EXCEL_FILES.rewards, sheetName);
+            const sheetKey = sheetName.toLowerCase().replace(/\s+/g, '_');
+            
+            // Apply date filter
+            const dateField = sheetName === 'Flyy points' ? 'Created_At' : 'Txn_Date';
+            sheetData = sheetData.filter(item => {
+                const date = parseDate(item[dateField]);
+                if (!date) return false;
+                if (dateRange.start && date < dateRange.start) return false;
+                if (dateRange.end && date > dateRange.end) return false;
+                return true;
+            });
+
+            // Map to standard format
+            sheetData.forEach(r => {
+                const rawDate = r.Created_At || r.Txn_Date || r.Date || r.timestamp;
+                let activityType = 'Cashback';
+                let amount = 0;
+                let description = '';
+
+                if (sheetKey.includes('flyy') || sheetKey.includes('points')) {
+                    activityType = 'Points';
+                    amount = parseAmount(r.Points || 0);
+                    description = r.Message || r.Description || 'Points Activity';
+                } else if (sheetKey.includes('load')) {
+                    activityType = 'Load';
+                    amount = parseAmount(r.BHD_Amount || r.Amount || r.amount || 0);
+                    description = r.description || r.transactionType_dsc || 'Wallet Load';
+                } else {
+                    activityType = 'Transaction';
+                    amount = parseAmount(r.BHD_Amount || r.Amount || r.amount || 0);
+                    description = r.otherPartyName || r.MCC_Name || r.transactionType_dsc || 'Card Transaction';
+                }
+
+                allActivity.push({
+                    date: formatDate(rawDate) || rawDate,
+                    sheet_type: sheetKey,
+                    type: activityType,
+                    description: description,
+                    amount: amount,
+                    currency: sheetKey.includes('flyy') ? 'Points' : 'BHD'
+                });
+            });
+        }
+
+        // Sort by date descending
+        allActivity.sort((a, b) => {
             const dateA = parseDate(a.date);
             const dateB = parseDate(b.date);
             return (dateB || 0) - (dateA || 0);
@@ -2762,9 +2897,10 @@ app.get(`${MCP_BASE}/rewards/activity`, async (req, res) => {
         res.json({
             success: true,
             tool: 'rewards_activity',
+            type: type || 'all',
             period: dateRange.label,
-            count: standardActivity.length,
-            activity: standardActivity.slice(0, 50)
+            count: allActivity.length,
+            activity: allActivity.slice(0, 50)
         });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
