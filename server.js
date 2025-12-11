@@ -1199,6 +1199,13 @@ app.get(`${MCP_BASE}/spend/summary`, async (req, res) => {
  *     tags: [Spending]
  *     parameters:
  *       - in: query
+ *         name: type
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [transactions, travelbuddy]
+ *         description: Data source - 'transactions' for main wallet or 'travelbuddy' for travel card
+ *       - in: query
  *         name: period
  *         schema:
  *           type: string
@@ -1218,6 +1225,8 @@ app.get(`${MCP_BASE}/spend/summary`, async (req, res) => {
  *                   type: string
  *                 period:
  *                   type: string
+ *                 type:
+ *                   type: string
  *                 categories:
  *                   type: array
  *                   items:
@@ -1230,35 +1239,57 @@ app.get(`${MCP_BASE}/spend/summary`, async (req, res) => {
  */
 app.get(`${MCP_BASE}/spend/by-category`, async (req, res) => {
     try {
-        const { period } = req.query;
-        const dateRange = parsePeriod(period);
-
-        const txns = await getMcpData('transactions');
-
-        const debitTxns = txns.filter(t => isDebit(t));
-
+        const { period, type } = req.query;
         
-        const filtered = filterByDate(debitTxns, dateRange, 'transaction_date_time');
-    
+        // Validate type parameter
+        if (!type || !['transactions', 'travelbuddy'].includes(type)) {
+            return res.status(400).json({
+                success: false,
+                error: "Parameter 'type' is required. Use 'transactions' or 'travelbuddy'."
+            });
+        }
+        
+        const dateRange = parsePeriod(period);
         const categoryMap = {};
 
-        filtered.forEach(t => {
-            // Use 'MCC_Category' as primary, fallback to 'mcc_description'
-            let cat = t.MCC_Category || t.mcc_description || 'Uncategorized';
-            // Handle case where category might be an object
-            if (!cat || typeof cat === 'object') {
-                cat = 'Uncategorized';
-            } else {
-                cat = String(cat).trim();
-            }
-            // Skip cleanup if we have a valid MCC_Category
-            if (cat.length < 3) cat = 'General';
+        if (type === 'transactions') {
+            const txns = await getMcpData('transactions');
+            const debitTxns = txns.filter(t => isDebit(t));
+            const filtered = filterByDate(debitTxns, dateRange, 'transaction_date_time');
 
-            const amt = getTxnAmount(t);
+            filtered.forEach(t => {
+                let cat = t.MCC_Category || t.mcc_description || 'Uncategorized';
+                if (!cat || typeof cat === 'object') {
+                    cat = 'Uncategorized';
+                } else {
+                    cat = String(cat).trim();
+                }
+                if (cat.length < 3) cat = 'General';
 
-            if (!categoryMap[cat]) categoryMap[cat] = 0;
-            categoryMap[cat] += amt;
-        });
+                const amt = getTxnAmount(t);
+                if (!categoryMap[cat]) categoryMap[cat] = 0;
+                categoryMap[cat] += amt;
+            });
+        } else if (type === 'travelbuddy') {
+            const travelTxns = await getMcpData('travelbuddy');
+            // Filter for spend transactions only (not loads)
+            const spendTxns = travelTxns.filter(t => !isLoad(t) && getTxnAmount(t) > 0);
+            const filtered = filterByDate(spendTxns, dateRange, 'Txn_Date');
+
+            filtered.forEach(t => {
+                let cat = t.mcc_category || t.MCC_Category || t.mcc_name || 'Uncategorized';
+                if (!cat || typeof cat === 'object') {
+                    cat = 'Uncategorized';
+                } else {
+                    cat = String(cat).trim();
+                }
+                if (cat.length < 3) cat = 'General';
+
+                const amt = getTxnAmount(t);
+                if (!categoryMap[cat]) categoryMap[cat] = 0;
+                categoryMap[cat] += amt;
+            });
+        }
 
         // Sort by amount desc
         const categories = Object.entries(categoryMap)
@@ -1272,6 +1303,7 @@ app.get(`${MCP_BASE}/spend/by-category`, async (req, res) => {
             success: true,
             tool: 'spend_by_category',
             period: dateRange.label,
+            type: type,
             categories: categories.slice(0, 15) // Top 15 categories
         });
     } catch (error) {
@@ -1288,6 +1320,13 @@ app.get(`${MCP_BASE}/spend/by-category`, async (req, res) => {
  *     tags: [Spending]
  *     parameters:
  *       - in: query
+ *         name: type
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [transactions, travelbuddy]
+ *         description: Data source - 'transactions' for main wallet or 'travelbuddy' for travel card
+ *       - in: query
  *         name: period
  *         schema: { type: string }
  *       - in: query
@@ -1299,28 +1338,52 @@ app.get(`${MCP_BASE}/spend/by-category`, async (req, res) => {
  */
 app.get(`${MCP_BASE}/spend/top-merchants`, async (req, res) => {
     try {
-        const { period, limit = 10 } = req.query;
+        const { period, limit = 10, type } = req.query;
+        
+        // Validate type parameter
+        if (!type || !['transactions', 'travelbuddy'].includes(type)) {
+            return res.status(400).json({
+                success: false,
+                error: "Parameter 'type' is required. Use 'transactions' or 'travelbuddy'."
+            });
+        }
+        
         const dateRange = parsePeriod(period);
-
-        const txns = await getMcpData('transactions');
-        const debitTxns = txns.filter(t => isDebit(t));
-        const filtered = filterByDate(debitTxns, dateRange, 'transaction_date_time');
-
         const merchantMap = {};
 
-        filtered.forEach(t => {
-            // Use description field (actual field name in transactions Excel)
-            let merchant = t.description || t.merchant_name || t.transaction_description || 'Unknown';
-            merchant = String(merchant).trim();
-            if (!merchant || merchant === '') merchant = 'Unknown';
-            
-            // Use absolute value for debit amounts (they may be stored as negative)
-            const amt = Math.abs(getTxnAmount(t));
+        if (type === 'transactions') {
+            const txns = await getMcpData('transactions');
+            const debitTxns = txns.filter(t => isDebit(t));
+            const filtered = filterByDate(debitTxns, dateRange, 'transaction_date_time');
 
-            if (!merchantMap[merchant]) merchantMap[merchant] = { amount: 0, count: 0 };
-            merchantMap[merchant].amount += amt;
-            merchantMap[merchant].count++;
-        });
+            filtered.forEach(t => {
+                let merchant = t.description || t.merchant_name || t.transaction_description || 'Unknown';
+                merchant = String(merchant).trim();
+                if (!merchant || merchant === '') merchant = 'Unknown';
+                
+                const amt = Math.abs(getTxnAmount(t));
+
+                if (!merchantMap[merchant]) merchantMap[merchant] = { amount: 0, count: 0 };
+                merchantMap[merchant].amount += amt;
+                merchantMap[merchant].count++;
+            });
+        } else if (type === 'travelbuddy') {
+            const travelTxns = await getMcpData('travelbuddy');
+            const spendTxns = travelTxns.filter(t => !isLoad(t) && getTxnAmount(t) > 0);
+            const filtered = filterByDate(spendTxns, dateRange, 'Txn_Date');
+
+            filtered.forEach(t => {
+                let merchant = t.otherPartyName || t.merchant_name || t.description || 'Unknown';
+                merchant = String(merchant).trim();
+                if (!merchant || merchant === '') merchant = 'Unknown';
+                
+                const amt = Math.abs(getTxnAmount(t));
+
+                if (!merchantMap[merchant]) merchantMap[merchant] = { amount: 0, count: 0 };
+                merchantMap[merchant].amount += amt;
+                merchantMap[merchant].count++;
+            });
+        }
 
         const merchants = Object.entries(merchantMap)
             .map(([name, stats]) => ({
@@ -1335,6 +1398,7 @@ app.get(`${MCP_BASE}/spend/top-merchants`, async (req, res) => {
             success: true,
             tool: 'spend_top_merchants',
             period: dateRange.label,
+            type: type,
             merchants
         });
     } catch (error) {
@@ -1532,6 +1596,13 @@ app.get(`${MCP_BASE}/spend/subscriptions`, async (req, res) => {
  *     tags: [Spending]
  *     parameters:
  *       - in: query
+ *         name: type
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [transactions, travelbuddy]
+ *         description: Data source - 'transactions' for main wallet or 'travelbuddy' for travel card
+ *       - in: query
  *         name: period
  *         schema: { type: string, default: week }
  *     responses:
@@ -1540,23 +1611,46 @@ app.get(`${MCP_BASE}/spend/subscriptions`, async (req, res) => {
  */
 app.get(`${MCP_BASE}/spend/daily`, async (req, res) => {
     try {
-        const { period } = req.query;
+        const { period, type } = req.query;
+        
+        // Validate type parameter
+        if (!type || !['transactions', 'travelbuddy'].includes(type)) {
+            return res.status(400).json({
+                success: false,
+                error: "Parameter 'type' is required. Use 'transactions' or 'travelbuddy'."
+            });
+        }
+        
         const dateRange = parsePeriod(period || 'week'); // Default to week
-
-        const txns = await getMcpData('transactions');
-        const debitTxns = txns.filter(t => isDebit(t));
-        const filtered = filterByDate(debitTxns, dateRange, 'transaction_date_time');
-
         const dailyStats = {};
 
-        filtered.forEach(t => {
-            const date = parseDate(t.transaction_date_time);
-            if (!date) return;
+        if (type === 'transactions') {
+            const txns = await getMcpData('transactions');
+            const debitTxns = txns.filter(t => isDebit(t));
+            const filtered = filterByDate(debitTxns, dateRange, 'transaction_date_time');
 
-            const key = date.toISOString().split('T')[0]; // YYYY-MM-DD
-            if (!dailyStats[key]) dailyStats[key] = 0;
-            dailyStats[key] += getTxnAmount(t);
-        });
+            filtered.forEach(t => {
+                const date = parseDate(t.transaction_date_time);
+                if (!date) return;
+
+                const key = date.toISOString().split('T')[0]; // YYYY-MM-DD
+                if (!dailyStats[key]) dailyStats[key] = 0;
+                dailyStats[key] += getTxnAmount(t);
+            });
+        } else if (type === 'travelbuddy') {
+            const travelTxns = await getMcpData('travelbuddy');
+            const spendTxns = travelTxns.filter(t => !isLoad(t) && getTxnAmount(t) > 0);
+            const filtered = filterByDate(spendTxns, dateRange, 'Txn_Date');
+
+            filtered.forEach(t => {
+                const date = parseDate(t.Txn_Date);
+                if (!date) return;
+
+                const key = date.toISOString().split('T')[0]; // YYYY-MM-DD
+                if (!dailyStats[key]) dailyStats[key] = 0;
+                dailyStats[key] += getTxnAmount(t);
+            });
+        }
 
         const timeline = Object.entries(dailyStats)
             .sort((a, b) => a[0].localeCompare(b[0]))
@@ -1569,6 +1663,7 @@ app.get(`${MCP_BASE}/spend/daily`, async (req, res) => {
             success: true,
             tool: 'spend_daily',
             period: dateRange.label,
+            type: type,
             timeline
         });
     } catch (error) {
@@ -1597,33 +1692,59 @@ app.get(`${MCP_BASE}/spend/daily`, async (req, res) => {
  */
 app.get(`${MCP_BASE}/spend/category`, async (req, res) => {
     try {
-        const { category, period } = req.query;
+        const { category, period, type } = req.query;
         if (!category) return res.json({ success: false, message: "Category required" });
+        
+        // Validate type parameter
+        if (!type || !['transactions', 'travelbuddy'].includes(type)) {
+            return res.status(400).json({
+                success: false,
+                error: "Parameter 'type' is required. Use 'transactions' or 'travelbuddy'."
+            });
+        }
 
         const dateRange = parsePeriod(period);
         const lowerCat = category.toLowerCase();
+        let matches = [];
+        const topMerchants = {};
 
-        const txns = await getMcpData('transactions');
-        const debitTxns = txns.filter(t => isDebit(t));
-        const filtered = filterByDate(debitTxns, dateRange, 'transaction_date_time');
+        if (type === 'transactions') {
+            const txns = await getMcpData('transactions');
+            const debitTxns = txns.filter(t => isDebit(t));
+            const filtered = filterByDate(debitTxns, dateRange, 'transaction_date_time');
 
-        const matches = filtered.filter(t =>
-            (t.MCC_Category || t.mcc_description || '').toLowerCase().includes(lowerCat)
-        );
+            matches = filtered.filter(t =>
+                (t.MCC_Category || t.mcc_description || '').toLowerCase().includes(lowerCat)
+            );
+
+            matches.forEach(t => {
+                const merch = t.description || t.merchant_name || 'Unknown';
+                if (!topMerchants[merch]) topMerchants[merch] = 0;
+                topMerchants[merch] += Math.abs(getTxnAmount(t));
+            });
+        } else if (type === 'travelbuddy') {
+            const travelTxns = await getMcpData('travelbuddy');
+            const spendTxns = travelTxns.filter(t => !isLoad(t) && getTxnAmount(t) > 0);
+            const filtered = filterByDate(spendTxns, dateRange, 'Txn_Date');
+
+            matches = filtered.filter(t =>
+                (t.mcc_category || t.MCC_Category || t.mcc_name || '').toLowerCase().includes(lowerCat)
+            );
+
+            matches.forEach(t => {
+                const merch = t.otherPartyName || t.merchant_name || 'Unknown';
+                if (!topMerchants[merch]) topMerchants[merch] = 0;
+                topMerchants[merch] += Math.abs(getTxnAmount(t));
+            });
+        }
 
         const total = matches.reduce((sum, t) => sum + Math.abs(getTxnAmount(t)), 0);
-
-        const topMerchants = {};
-        matches.forEach(t => {
-            const merch = t.description || t.merchant_name || 'Unknown';
-            if (!topMerchants[merch]) topMerchants[merch] = 0;
-            topMerchants[merch] += Math.abs(getTxnAmount(t));
-        });
 
         res.json({
             success: true,
             tool: 'spend_category',
             category_query: category,
+            type: type,
             total_amount: Math.round(total * 100) / 100,
             transaction_count: matches.length,
             top_merchants: Object.entries(topMerchants)

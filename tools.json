@@ -31,32 +31,42 @@
   },
   {
     "name": "get_spend_by_category",
-    "description": "Get spending breakdown by MCC category",
+    "description": "Get spending breakdown by MCC category. Must specify 'type' as either 'transactions' (main wallet) or 'travelbuddy' (travel card).",
     "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/by-category",
     "method": "GET",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["transactions", "travelbuddy"],
+          "description": "Required. Data source: 'transactions' for main wallet or 'travelbuddy' for travel card"
+        },
         "period": {
           "type": "string",
           "description": "Time period: yesterday, week, month, last_month, year, OR specific month like 'august_2024', 'nov_2024', '8_2024'"
         }
       },
-      "required": []
+      "required": ["type"]
     },
     "headers": {
       "Content-Type": "application/json"
     },
-    "queryParams": ["period"]
+    "queryParams": ["type", "period"]
   },
   {
     "name": "get_top_merchants",
-    "description": "Get top merchants by spending amount",
+    "description": "Get top merchants by spending amount. Must specify 'type' as either 'transactions' (main wallet) or 'travelbuddy' (travel card).",
     "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/top-merchants",
     "method": "GET",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["transactions", "travelbuddy"],
+          "description": "Required. Data source: 'transactions' for main wallet or 'travelbuddy' for travel card"
+        },
         "period": {
           "type": "string",
           "description": "Time period for the analysis"
@@ -66,12 +76,12 @@
           "description": "Maximum number of merchants to return (default: 10)"
         }
       },
-      "required": []
+      "required": ["type"]
     },
     "headers": {
       "Content-Type": "application/json"
     },
-    "queryParams": ["period", "limit"]
+    "queryParams": ["type", "period", "limit"]
   },
   {
     "name": "get_spend_trend",
@@ -141,32 +151,42 @@
   },
   {
     "name": "get_daily_spend",
-    "description": "Get daily spending timeline breakdown",
+    "description": "Get daily spending timeline breakdown. Must specify 'type' as either 'transactions' (main wallet) or 'travelbuddy' (travel card).",
     "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/daily",
     "method": "GET",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["transactions", "travelbuddy"],
+          "description": "Required. Data source: 'transactions' for main wallet or 'travelbuddy' for travel card"
+        },
         "period": {
           "type": "string",
           "description": "Time period for daily breakdown (default: week)"
         }
       },
-      "required": []
+      "required": ["type"]
     },
     "headers": {
       "Content-Type": "application/json"
     },
-    "queryParams": ["period"]
+    "queryParams": ["type", "period"]
   },
   {
     "name": "get_category_spend",
-    "description": "Get detailed spending for a specific category",
+    "description": "Get detailed spending for a specific category. Must specify 'type' as either 'transactions' (main wallet) or 'travelbuddy' (travel card).",
     "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/category",
     "method": "GET",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["transactions", "travelbuddy"],
+          "description": "Required. Data source: 'transactions' for main wallet or 'travelbuddy' for travel card"
+        },
         "category": {
           "type": "string",
           "description": "Category name to filter (e.g., Food, Travel, Shopping)"
@@ -176,12 +196,12 @@
           "description": "Time period for the analysis"
         }
       },
-      "required": ["category"]
+      "required": ["type", "category"]
     },
     "headers": {
       "Content-Type": "application/json"
     },
-    "queryParams": ["category", "period"]
+    "queryParams": ["type", "category", "period"]
   },
   {
     "name": "flag_unusual_activity",
