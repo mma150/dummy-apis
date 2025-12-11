@@ -2399,16 +2399,22 @@ app.get(`${MCP_BASE}/remittance/summary`, async (req, res) => {
 
         const txns = await getMcpData('remittance');
 
-        // Filter by year and optionally by month
-        const filteredTxns = txns.filter(t => {
+        // Filter by year and optionally by month (all transactions)
+        const allFilteredTxns = txns.filter(t => {
             const date = parseDate(t.timestamp_created);
-            if (!date || t.status === false) return false;
+            if (!date) return false;
             if (date.getFullYear() !== targetYear) return false;
             if (targetMonth && (date.getMonth() + 1) !== targetMonth) return false;
             return true;
         });
 
-        const totalAmount = filteredTxns.reduce((sum, t) => sum + parseAmount(t.total_amount_in_BHD), 0);
+        // Separate successful and failed
+        const successfulTxns = allFilteredTxns.filter(t => t.status !== false);
+        const failedTxns = allFilteredTxns.filter(t => t.status === false);
+
+        const totalAmount = allFilteredTxns.reduce((sum, t) => sum + parseAmount(t.total_amount_in_BHD), 0);
+        const successfulAmount = successfulTxns.reduce((sum, t) => sum + parseAmount(t.total_amount_in_BHD), 0);
+        const failedAmount = failedTxns.reduce((sum, t) => sum + parseAmount(t.total_amount_in_BHD), 0);
 
         // Build period label
         const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -2420,9 +2426,19 @@ app.get(`${MCP_BASE}/remittance/summary`, async (req, res) => {
             period: periodLabel,
             year: targetYear,
             month: targetMonth || null,
-            total_remitted: Math.round(totalAmount * 100) / 100,
-            count: filteredTxns.length,
-            average_amount: filteredTxns.length ? Math.round((totalAmount / filteredTxns.length) * 100) / 100 : 0
+            total: {
+                count: allFilteredTxns.length,
+                amount: Math.round(totalAmount * 100) / 100
+            },
+            successful: {
+                count: successfulTxns.length,
+                amount: Math.round(successfulAmount * 100) / 100
+            },
+            failed: {
+                count: failedTxns.length,
+                amount: Math.round(failedAmount * 100) / 100
+            },
+            average_successful_amount: successfulTxns.length ? Math.round((successfulAmount / successfulTxns.length) * 100) / 100 : 0
         });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
