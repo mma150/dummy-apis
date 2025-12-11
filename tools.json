@@ -1,23 +1,33 @@
 [
   {
     "name": "get_spend_summary",
-    "description": "Get total spending summary including income, expenses, and net balance for a specified period",
+    "description": "Get total spending summary including income, expenses, and net balance for a specified period. Must specify 'type' as either 'transactions' (main bank transactions) or 'travelbuddy' (travel card transactions). For travelbuddy, use 'subtype=combine' to include both Load and Transaction data.",
     "endpoint": "https://dummy-api.omnikit.live/api/mcp/spend/summary",
     "method": "GET",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["transactions", "travelbuddy"],
+          "description": "Required. Data source: 'transactions' for main bank transactions or 'travelbuddy' for travel buddy card transactions"
+        },
+        "subtype": {
+          "type": "string",
+          "enum": ["combine"],
+          "description": "For travelbuddy only. Use 'combine' to include both Load (as income) and Transaction (as spend) sheets. Without this, only Transaction sheet spend is returned."
+        },
         "period": {
           "type": "string",
           "description": "Time period: yesterday, week, month, last_month, year, all_time, OR specific month like 'august_2024', 'aug_2024', '8_2024', '2024_8'. Also supports week of month like 'week_1_august_2024', 'first_week_of_november_2024'"
         }
       },
-      "required": []
+      "required": ["type"]
     },
     "headers": {
       "Content-Type": "application/json"
     },
-    "queryParams": ["period"]
+    "queryParams": ["type", "subtype", "period"]
   },
   {
     "name": "get_spend_by_category",

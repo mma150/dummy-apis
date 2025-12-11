@@ -1062,6 +1062,19 @@ const MCP_BASE = '/api/mcp';
  *           type: string
  *           enum: [yesterday, week, month, last_month, year]
  *         description: Time period for the summary (default is all time)
+ *       - in: query
+ *         name: type
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [transactions, travelbuddy]
+ *         description: Data source - 'transactions' for main transactions or 'travelbuddy' for travel buddy transactions
+ *       - in: query
+ *         name: subtype
+ *         schema:
+ *           type: string
+ *           enum: [combine]
+ *         description: For travelbuddy only - use 'combine' to include both Load and Transaction sheets
  *     responses:
  *       200:
  *         description: Successful response
@@ -1075,6 +1088,8 @@ const MCP_BASE = '/api/mcp';
  *                 tool:
  *                   type: string
  *                 period:
+ *                   type: string
+ *                 type:
  *                   type: string
  *                 summary:
  *                   type: object
@@ -1090,53 +1105,78 @@ const MCP_BASE = '/api/mcp';
  */
 app.get(`${MCP_BASE}/spend/summary`, async (req, res) => {
     try {
-        const { period } = req.query;
+        const { period, type, subtype } = req.query;
+        
+        // Validate type parameter
+        if (!type || !['transactions', 'travelbuddy'].includes(type)) {
+            return res.status(400).json({
+                success: false,
+                error: "Parameter 'type' is required. Use 'transactions' or 'travelbuddy'."
+            });
+        }
+        
         const dateRange = parsePeriod(period);
 
-        // Fetch transactions (main + travelbuddy for comprehensive view)
-        const [txns, travelTxns] = await Promise.all([
-            getMcpData('transactions'),
-            getMcpData('travelbuddy')
-        ]);
-
-        // Filter valid spending transactions (using case-insensitive helpers)
-        const mainSpend = txns.filter(t => isDebit(t) && getTxnAmount(t) > 0);
-
-        // TravelBuddy: filter for spend transactions (not loads)
-        const travelSpend = travelTxns.filter(t => {
-            if (isLoad(t)) return false;
-            const amt = getTxnAmount(t);
-            return amt > 0;
-        });
-
-        // Filter by date
-        const filteredMain = filterByDate(mainSpend, dateRange, 'transaction_date_time');
-        const filteredTravel = filterByDate(travelSpend, dateRange, 'Txn_Date');
-
-        // Calculate totals
         let totalSpent = 0;
         let totalIncome = 0;
         let txnCount = 0;
 
-        filteredMain.forEach(t => {
-            totalSpent += getTxnAmount(t);
-            txnCount++;
-        });
+        if (type === 'transactions') {
+            // Fetch main transactions only
+            const txns = await getMcpData('transactions');
 
-        filteredTravel.forEach(t => {
-            totalSpent += getTxnAmount(t);
-            txnCount++;
-        });
+            // Filter valid spending transactions (debits)
+            const mainSpend = txns.filter(t => isDebit(t) && getTxnAmount(t) > 0);
+            const filteredMain = filterByDate(mainSpend, dateRange, 'transaction_date_time');
 
-        // Calculate Income from main transactions (Credit)
-        const mainIncome = txns.filter(t => isCredit(t));
-        const filteredIncome = filterByDate(mainIncome, dateRange, 'transaction_date_time');
-        filteredIncome.forEach(t => totalIncome += getTxnAmount(t));
+            filteredMain.forEach(t => {
+                totalSpent += getTxnAmount(t);
+                txnCount++;
+            });
+
+            // Calculate Income from main transactions (Credit)
+            const mainIncome = txns.filter(t => isCredit(t));
+            const filteredIncome = filterByDate(mainIncome, dateRange, 'transaction_date_time');
+            filteredIncome.forEach(t => totalIncome += getTxnAmount(t));
+
+        } else if (type === 'travelbuddy') {
+            // Fetch travelbuddy transactions only
+            const travelTxns = await getMcpData('travelbuddy');
+
+            if (subtype === 'combine') {
+                // Combine Load and Transaction sheets
+                // Load transactions count as income
+                const loadTxns = travelTxns.filter(t => isLoad(t) && getTxnAmount(t) > 0);
+                const filteredLoads = filterByDate(loadTxns, dateRange, 'Txn_Date');
+                filteredLoads.forEach(t => {
+                    totalIncome += getTxnAmount(t);
+                    txnCount++;
+                });
+
+                // Spend transactions (not loads)
+                const spendTxns = travelTxns.filter(t => !isLoad(t) && getTxnAmount(t) > 0);
+                const filteredSpend = filterByDate(spendTxns, dateRange, 'Txn_Date');
+                filteredSpend.forEach(t => {
+                    totalSpent += getTxnAmount(t);
+                    txnCount++;
+                });
+            } else {
+                // Default: Only Transaction sheet (spend), no loads
+                const spendTxns = travelTxns.filter(t => !isLoad(t) && getTxnAmount(t) > 0);
+                const filteredSpend = filterByDate(spendTxns, dateRange, 'Txn_Date');
+                filteredSpend.forEach(t => {
+                    totalSpent += getTxnAmount(t);
+                    txnCount++;
+                });
+            }
+        }
 
         res.json({
             success: true,
             tool: 'spend_summary',
             period: dateRange.label,
+            type: type,
+            subtype: subtype || 'default',
             summary: {
                 total_spent: Math.round(totalSpent * 100) / 100,
                 total_income: Math.round(totalIncome * 100) / 100,
