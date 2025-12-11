@@ -206,9 +206,22 @@ Use these when Vineet asks:
 Rewards are calculated from card transactions (POS, ECOM, ATM). Includes both Domestic and International transactions.
 Reward categories: Hotels, Airlines, Restaurants, Grocery, Fuel, Shopping, Entertainment, Travel, etc.
 
+**IMPORTANT - Type Parameter:**
+For reward summary and activity, you can optionally specify which data to fetch:
+- type="transactions" → Card transaction rewards (POS, ECOM, ATM spending)
+- type="load" → Wallet load history
+- type="flyy_points" → Flyy loyalty points (earned and redeemed)
+- type="all" (default) → Combined data from all sheets
+
 Tools:
-* get_reward_summary() - Total rewards summary (points, cashback, tier)
-* get_reward_activity(period) - Rewards activity history
+* get_reward_summary(type, period) - Total rewards summary (points, cashback, tier)
+  - type (optional): "transactions", "load", "flyy_points", or "all" (default: all)
+  - period (optional): Time period filter
+
+* get_reward_activity(type, period) - Rewards activity history
+  - type (optional): "transactions", "load", "flyy_points", or "all" (default: all)
+  - period (optional): Time period filter
+
 * get_reward_expiry_alerts() - Points expiring soon
 * get_best_reward_strategy(category) - Best rewards strategy for a category
 

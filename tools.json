@@ -461,27 +461,42 @@
   },
   {
     "name": "get_reward_summary",
-    "description": "Get total rewards summary including points, cashback, and tier status",
+    "description": "Get total rewards summary including points, cashback, and tier status. Use 'type' to filter by specific sheet: 'transactions' for card transactions, 'load' for wallet loads, 'flyy_points' for Flyy points, or 'all' for combined summary.",
     "endpoint": "https://dummy-api.omnikit.live/api/mcp/rewards/summary",
     "method": "GET",
     "inputSchema": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["transactions", "load", "flyy_points", "all"],
+          "description": "Data source: 'transactions' for card transactions, 'load' for wallet loads, 'flyy_points' for Flyy points, or 'all' for combined summary (default: all)"
+        },
+        "period": {
+          "type": "string",
+          "description": "Time period: yesterday, week, month, last_month, year, OR specific month like 'august_2024', 'nov_2024'"
+        }
+      },
       "required": []
     },
     "headers": {
       "Content-Type": "application/json"
     },
-    "queryParams": []
+    "queryParams": ["type", "period"]
   },
   {
     "name": "get_reward_activity",
-    "description": "Get rewards activity history by period",
+    "description": "Get rewards activity history by period. Use 'type' to filter by specific sheet: 'transactions' for card transactions, 'load' for wallet loads, 'flyy_points' for Flyy points, or 'all' for combined activity.",
     "endpoint": "https://dummy-api.omnikit.live/api/mcp/rewards/activity",
     "method": "GET",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["transactions", "load", "flyy_points", "all"],
+          "description": "Data source: 'transactions' for card transactions, 'load' for wallet loads, 'flyy_points' for Flyy points, or 'all' for combined activity (default: all)"
+        },
         "period": {
           "type": "string",
           "description": "Time period for activity history"
@@ -492,7 +507,7 @@
     "headers": {
       "Content-Type": "application/json"
     },
-    "queryParams": ["period"]
+    "queryParams": ["type", "period"]
   },
   {
     "name": "get_reward_expiry_alerts",
