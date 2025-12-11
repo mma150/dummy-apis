@@ -2653,21 +2653,36 @@ app.post(`${MCP_BASE}/finance/set-alert`, async (req, res) => {
  */
 app.get(`${MCP_BASE}/utility/balance`, async (req, res) => {
     try {
-        // Calculate current balance based on all history
+        // Get current balance from the latest transaction's available_balance field
         const txns = await getMcpData('transactions');
-        let balance = 0;
-
+        
+        // Find the latest transaction by date
+        let latestTxn = null;
+        let latestDate = null;
+        
         txns.forEach(t => {
-            const amt = getTxnAmount(t);
-            if (isCredit(t)) balance += amt;
-            else balance -= amt;
+            const dateVal = t.transaction_date_time || t.created_date;
+            if (dateVal) {
+                const date = parseDate(dateVal);
+                if (date && (!latestDate || date > latestDate)) {
+                    latestDate = date;
+                    latestTxn = t;
+                }
+            }
         });
+        
+        // Get balance from the latest transaction
+        let balance = 0;
+        if (latestTxn) {
+            balance = parseFloat(latestTxn.available_balance_in_BHD) || 0;
+        }
 
         res.json({
             success: true,
             tool: 'get_current_balance',
             current_balance: Math.round(balance * 100) / 100,
-            currency: 'BHD'
+            currency: 'BHD',
+            as_of: latestDate ? latestDate.toISOString() : null
         });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
