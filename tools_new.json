@@ -1,0 +1,125 @@
+[
+  {
+    "name": "validate_user_by_cpr",
+    "description": "Validate and retrieve user details by CPR (Civil Personal Record) number. Returns complete user profile including personal information, address, occupation, and income. Use this to verify user identity before processing transactions.",
+    "endpoint": "https://dummy-api.omnikit.live/api/test/user-details",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cpr": {
+          "type": "string",
+          "description": "Required. User's CPR number (e.g., 850112345, 920556789, 781290123)"
+        }
+      },
+      "required": ["cpr"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["cpr"]
+  },
+  {
+    "name": "get_monthly_transaction_summary",
+    "description": "Get aggregated monthly transaction summary for a specific CPR. Returns total credits, debits, net amount, transaction counts, category breakdown, and status breakdown. Use this when user asks for monthly summary, overview, or statistics.",
+    "endpoint": "https://dummy-api.omnikit.live/api/test/monthly-transactions-summary",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cpr": {
+          "type": "string",
+          "description": "Required. User's CPR number"
+        },
+        "month": {
+          "type": "integer",
+          "description": "Month number (1-12). Defaults to current month if not specified"
+        },
+        "year": {
+          "type": "integer",
+          "description": "Year (YYYY format, e.g., 2025). Defaults to current year if not specified"
+        }
+      },
+      "required": ["cpr"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["cpr", "month", "year"]
+  },
+  {
+    "name": "get_monthly_transactions_detailed",
+    "description": "Get detailed list of all transactions for a CPR in a specific month. Returns individual transaction records with full details including transaction ID, date, description, type, amount, category, status, and payment source. Supports filtering by transaction type (Credit/Debit) and category.",
+    "endpoint": "https://dummy-api.omnikit.live/api/test/monthly-transactions",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cpr": {
+          "type": "string",
+          "description": "Required. User's CPR number"
+        },
+        "month": {
+          "type": "integer",
+          "description": "Month number (1-12). Defaults to current month"
+        },
+        "year": {
+          "type": "integer",
+          "description": "Year (YYYY). Defaults to current year"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["Credit", "Debit"],
+          "description": "Optional filter by transaction type: 'Credit' for incoming money, 'Debit' for outgoing money"
+        },
+        "category": {
+          "type": "string",
+          "description": "Optional filter by category (e.g., Salary, Shopping, Utilities, Dining, Transport, Entertainment, Health, Housing, Groceries, Transfer)"
+        }
+      },
+      "required": ["cpr"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["cpr", "month", "year", "type", "category"]
+  },
+  {
+    "name": "get_all_transactions_by_cpr",
+    "description": "Get all transactions for a specific CPR across all time periods with pagination support. Returns complete transaction history sorted by date (newest first) with summary statistics. Use this when user asks for complete transaction history, all transactions, or transaction list with pagination.",
+    "endpoint": "https://dummy-api.omnikit.live/api/test/all-transactions",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cpr": {
+          "type": "string",
+          "description": "Required. User's CPR number"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Number of records to return per page (default: 100, max: 100)"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Number of records to skip for pagination (default: 0). Use offset=0 for first page, offset=100 for second page, etc."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["Credit", "Debit"],
+          "description": "Optional filter by transaction type"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Completed", "Pending"],
+          "description": "Optional filter by transaction status"
+        }
+      },
+      "required": ["cpr"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["cpr", "limit", "offset", "type", "status"]
+  }
+]

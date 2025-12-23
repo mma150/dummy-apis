@@ -11,6 +11,7 @@ const initRemittanceRoutes = require('./routes/remittance');
 const initTransactionsRoutes = require('./routes/transactions');
 const initRewardsRoutes = require('./routes/rewards');
 const initTravelBuddyRoutes = require('./routes/travelbuddy');
+const initTestRoutes = require('./routes/test');
 
 const app = express();
 const port = process.env.PORT || 9191;
@@ -43,7 +44,7 @@ app.use(express.json());
 app.use((req, res, next) => {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
-    
+
     // Log request
     console.log(`\n📥 [${timestamp}] ${req.method} ${req.originalUrl}`);
     if (Object.keys(req.query).length > 0) {
@@ -52,16 +53,16 @@ app.use((req, res, next) => {
     if (req.body && Object.keys(req.body).length > 0) {
         console.log(`   Body: ${JSON.stringify(req.body)}`);
     }
-    
+
     // Capture response
     const originalSend = res.send;
-    res.send = function(data) {
+    res.send = function (data) {
         const duration = Date.now() - startTime;
         const statusEmoji = res.statusCode >= 400 ? '❌' : '✅';
         console.log(`${statusEmoji} [${timestamp}] ${req.method} ${req.originalUrl} - ${res.statusCode} (${duration}ms)`);
         return originalSend.call(this, data);
     };
-    
+
     next();
 });
 
@@ -132,7 +133,7 @@ async function autoWarmupCache() {
         ];
 
         const smallResults = await Promise.all(warmupPromises);
-        
+
         // Now warmup large files by sheet (reduces memory pressure)
         const largeFilePromises = [
             // Rewards - cache each sheet separately
@@ -188,7 +189,7 @@ async function autoWarmupCache() {
     try {
         await redisClient.connect();
         console.log(`Connected to Redis at ${REDIS_URL}, DB: ${REDIS_DB}`);
-        
+
         // Auto warmup cache after successful connection
         // Use setTimeout to not block server startup
         setTimeout(autoWarmupCache, 1000);
@@ -300,13 +301,13 @@ async function getSheetData(fileType, sheetName, filePath) {
     const sheetKey = SHEET_KEY_MAP[sheetName] || sheetName.toLowerCase().replace(/\s+/g, '');
     const memKey = `mem:${fileType}:${sheetKey}`;
     const redisKey = `${fileType}:${sheetKey}`;
-    
+
     // 1. Check memory cache first (fastest)
     const memCached = getFromMemoryCache(memKey);
     if (memCached) {
         return memCached;
     }
-    
+
     // 2. Check Redis cache
     const redisCached = await getFromCache(redisKey);
     if (redisCached && redisCached.data) {
@@ -314,11 +315,11 @@ async function getSheetData(fileType, sheetName, filePath) {
         setToMemoryCache(memKey, redisCached.data);
         return redisCached.data;
     }
-    
+
     // 3. Load from file and cache in both layers
     const data = await readExcelSheet(filePath, sheetName);
     const dataWithSheet = data.map(row => ({ ...row, _sheet: sheetName }));
-    
+
     // Cache in both Redis and memory
     setToMemoryCache(memKey, dataWithSheet);
     setToCache(redisKey, {
@@ -327,19 +328,19 @@ async function getSheetData(fileType, sheetName, filePath) {
         total_records: dataWithSheet.length,
         data: dataWithSheet
     });
-    
+
     return dataWithSheet;
 }
 
 // Get rewards data - loads sheets in PARALLEL
 async function getRewardsData(sheetName = null) {
     const sheets = sheetName ? [sheetName] : ['Transactions', 'Load', 'Flyy points'];
-    
+
     // Load all sheets in parallel for better performance
-    const sheetPromises = sheets.map(sheet => 
+    const sheetPromises = sheets.map(sheet =>
         getSheetData('rewards', sheet, EXCEL_FILES.rewards)
     );
-    
+
     const results = await Promise.all(sheetPromises);
     return results.flat();
 }
@@ -347,12 +348,12 @@ async function getRewardsData(sheetName = null) {
 // Get travelbuddy data - loads sheets in PARALLEL
 async function getTravelBuddyData(sheetName = null) {
     const sheets = sheetName ? [sheetName] : ['Transactions', 'Load'];
-    
+
     // Load all sheets in parallel for better performance
-    const sheetPromises = sheets.map(sheet => 
+    const sheetPromises = sheets.map(sheet =>
         getSheetData('travelbuddy', sheet, EXCEL_FILES.travelbuddy)
     );
-    
+
     const results = await Promise.all(sheetPromises);
     return results.flat();
 }
@@ -720,9 +721,9 @@ function parsePeriod(period) {
                 const firstDay = new Date(year, monthIndex, 1);
                 const lastDay = new Date(year, monthIndex + 1, 0);
                 const totalDays = lastDay.getDate();
-                
+
                 let startDay, endDay;
-                
+
                 if (weekNum === -1) {
                     // Last week of month (last 7 days)
                     endDay = totalDays;
@@ -731,12 +732,12 @@ function parsePeriod(period) {
                     // Week 1 = days 1-7, Week 2 = days 8-14, etc.
                     startDay = (weekNum - 1) * 7 + 1;
                     endDay = Math.min(weekNum * 7, totalDays);
-                    
+
                     if (startDay > totalDays) {
                         return null; // Invalid week number
                     }
                 }
-                
+
                 const start = new Date(year, monthIndex, startDay);
                 const end = new Date(year, monthIndex, endDay, 23, 59, 59, 999);
                 return { start, end };
@@ -749,7 +750,7 @@ function parsePeriod(period) {
                 const monthName = weekMonthYearMatch[2];
                 const year = parseInt(weekMonthYearMatch[3]);
                 const weekNum = WEEK_NUM_MAP[weekKey] || parseInt(weekKey);
-                
+
                 if (MONTH_MAP[monthName] !== undefined && weekNum && year >= 2000 && year <= 2100) {
                     const monthIndex = MONTH_MAP[monthName];
                     const weekDates = getWeekOfMonth(year, monthIndex, weekNum);
@@ -767,7 +768,7 @@ function parsePeriod(period) {
                 const monthName = ordinalWeekMatch[2];
                 const year = parseInt(ordinalWeekMatch[3]);
                 const weekNum = WEEK_NUM_MAP[weekKey];
-                
+
                 if (MONTH_MAP[monthName] !== undefined && weekNum && year >= 2000 && year <= 2100) {
                     const monthIndex = MONTH_MAP[monthName];
                     const weekDates = getWeekOfMonth(year, monthIndex, weekNum);
@@ -784,7 +785,7 @@ function parsePeriod(period) {
                 const weekKey = weekMonthMatch[1];
                 const monthName = weekMonthMatch[2];
                 const weekNum = WEEK_NUM_MAP[weekKey] || parseInt(weekKey);
-                
+
                 if (MONTH_MAP[monthName] !== undefined && weekNum) {
                     const monthIndex = MONTH_MAP[monthName];
                     const year = monthIndex > today.getMonth() ? today.getFullYear() - 1 : today.getFullYear();
@@ -803,7 +804,7 @@ function parsePeriod(period) {
                 const monthName = weekOfMonthMatch[2];
                 const yearStr = weekOfMonthMatch[3];
                 const weekNum = WEEK_NUM_MAP[weekKey] || parseInt(weekKey);
-                
+
                 if (MONTH_MAP[monthName] !== undefined && weekNum) {
                     const monthIndex = MONTH_MAP[monthName];
                     let year = yearStr ? parseInt(yearStr) : (monthIndex > today.getMonth() ? today.getFullYear() - 1 : today.getFullYear());
@@ -822,7 +823,7 @@ function parsePeriod(period) {
                 const year = parseInt(weekYearMonthMatch[2]);
                 const month = parseInt(weekYearMonthMatch[3]);
                 const weekNum = WEEK_NUM_MAP[weekKey] || parseInt(weekKey);
-                
+
                 if (month >= 1 && month <= 12 && weekNum && year >= 2000 && year <= 2100) {
                     const monthIndex = month - 1;
                     const weekDates = getWeekOfMonth(year, monthIndex, weekNum);
@@ -835,7 +836,7 @@ function parsePeriod(period) {
 
             // Try to parse specific month/year formats:
             // Format: "november_2024", "nov_2024", "11_2024", "2024_11", "2024_november"
-            
+
             // Pattern 1: month_year (e.g., november_2024, nov_2024)
             const monthYearMatch = p.match(/^([a-z]+)_(\d{4})$/);
             if (monthYearMatch) {
@@ -929,7 +930,7 @@ async function getMcpData(dataType) {
 
     // Memory cache keys for smaller files
     const memKey = `mem:${dataType}:default`;
-    
+
     // 1. Check memory cache first (fastest)
     const memCached = getFromMemoryCache(memKey);
     if (memCached) {
@@ -985,7 +986,7 @@ async function getMcpData(dataType) {
     // Cache in both memory and Redis
     setToMemoryCache(memKey, data);
     if (cacheKey && cacheResponse) {
-        setToCache(cacheKey, cacheResponse).catch(err => 
+        setToCache(cacheKey, cacheResponse).catch(err =>
             console.error(`Failed to cache ${dataType}:`, err.message)
         );
     }
@@ -1106,7 +1107,7 @@ const MCP_BASE = '/api/mcp';
 app.get(`${MCP_BASE}/spend/summary`, async (req, res) => {
     try {
         const { period, type, subtype } = req.query;
-        
+
         // Validate type parameter
         if (!type || !['transactions', 'travelbuddy'].includes(type)) {
             return res.status(400).json({
@@ -1114,7 +1115,7 @@ app.get(`${MCP_BASE}/spend/summary`, async (req, res) => {
                 error: "Parameter 'type' is required. Use 'transactions' or 'travelbuddy'."
             });
         }
-        
+
         const dateRange = parsePeriod(period);
 
         let totalSpent = 0;
@@ -1217,7 +1218,7 @@ app.get(`${MCP_BASE}/spend/summary`, async (req, res) => {
 app.get(`${MCP_BASE}/spend/detailed-breakdown`, async (req, res) => {
     try {
         const { period, type } = req.query;
-        
+
         // Validate type parameter
         if (!type || !['transactions', 'travelbuddy'].includes(type)) {
             return res.status(400).json({
@@ -1225,9 +1226,9 @@ app.get(`${MCP_BASE}/spend/detailed-breakdown`, async (req, res) => {
                 error: "Parameter 'type' is required. Use 'transactions' or 'travelbuddy'."
             });
         }
-        
+
         const dateRange = parsePeriod(period);
-        
+
         let totalSpent = 0;
         let totalIncome = 0;
         let txnCount = 0;
@@ -1238,16 +1239,16 @@ app.get(`${MCP_BASE}/spend/detailed-breakdown`, async (req, res) => {
 
         if (type === 'transactions') {
             const txns = await getMcpData('transactions');
-            
+
             // Filter debits (spending)
             const debitTxns = txns.filter(t => isDebit(t));
             const filteredDebits = filterByDate(debitTxns, dateRange, 'transaction_date_time');
-            
+
             filteredDebits.forEach(t => {
                 const amt = Math.abs(getTxnAmount(t));
                 totalSpent += amt;
                 txnCount++;
-                
+
                 // Category breakdown
                 let cat = t.MCC_Category || t.mcc_description || t.transaction_type || 'Uncategorized';
                 if (!cat || typeof cat === 'object') cat = 'Uncategorized';
@@ -1256,7 +1257,7 @@ app.get(`${MCP_BASE}/spend/detailed-breakdown`, async (req, res) => {
                 if (!categoryMap[cat]) categoryMap[cat] = { amount: 0, count: 0 };
                 categoryMap[cat].amount += amt;
                 categoryMap[cat].count++;
-                
+
                 // Merchant breakdown
                 let merchant = t.description || t.merchant_name || t.transaction_description || 'Unknown';
                 merchant = String(merchant).trim();
@@ -1264,7 +1265,7 @@ app.get(`${MCP_BASE}/spend/detailed-breakdown`, async (req, res) => {
                 if (!merchantMap[merchant]) merchantMap[merchant] = { amount: 0, count: 0 };
                 merchantMap[merchant].amount += amt;
                 merchantMap[merchant].count++;
-                
+
                 // Daily breakdown
                 const date = parseDate(t.transaction_date_time);
                 if (date) {
@@ -1272,31 +1273,31 @@ app.get(`${MCP_BASE}/spend/detailed-breakdown`, async (req, res) => {
                     if (!dailyStats[key]) dailyStats[key] = 0;
                     dailyStats[key] += amt;
                 }
-                
+
                 // Transaction type breakdown
                 const txnType = t.transaction_type || 'OTHER';
                 if (!transactionTypes[txnType]) transactionTypes[txnType] = { amount: 0, count: 0 };
                 transactionTypes[txnType].amount += amt;
                 transactionTypes[txnType].count++;
             });
-            
+
             // Calculate income (credits)
             const creditTxns = txns.filter(t => isCredit(t));
             const filteredCredits = filterByDate(creditTxns, dateRange, 'transaction_date_time');
             filteredCredits.forEach(t => totalIncome += getTxnAmount(t));
-            
+
         } else if (type === 'travelbuddy') {
             const travelTxns = await getMcpData('travelbuddy');
-            
+
             // Filter spend transactions (not loads)
             const spendTxns = travelTxns.filter(t => !isLoad(t) && getTxnAmount(t) > 0);
             const filtered = filterByDate(spendTxns, dateRange, 'Txn_Date');
-            
+
             filtered.forEach(t => {
                 const amt = Math.abs(getTxnAmount(t));
                 totalSpent += amt;
                 txnCount++;
-                
+
                 // Category breakdown
                 let cat = t.mcc_category || t.MCC_Category || t.mcc_name || 'Uncategorized';
                 if (!cat || typeof cat === 'object') cat = 'Uncategorized';
@@ -1305,7 +1306,7 @@ app.get(`${MCP_BASE}/spend/detailed-breakdown`, async (req, res) => {
                 if (!categoryMap[cat]) categoryMap[cat] = { amount: 0, count: 0 };
                 categoryMap[cat].amount += amt;
                 categoryMap[cat].count++;
-                
+
                 // Merchant breakdown
                 let merchant = t.otherPartyName || t.merchant_name || t.description || 'Unknown';
                 merchant = String(merchant).trim();
@@ -1313,7 +1314,7 @@ app.get(`${MCP_BASE}/spend/detailed-breakdown`, async (req, res) => {
                 if (!merchantMap[merchant]) merchantMap[merchant] = { amount: 0, count: 0 };
                 merchantMap[merchant].amount += amt;
                 merchantMap[merchant].count++;
-                
+
                 // Daily breakdown
                 const date = parseDate(t.Txn_Date);
                 if (date) {
@@ -1321,14 +1322,14 @@ app.get(`${MCP_BASE}/spend/detailed-breakdown`, async (req, res) => {
                     if (!dailyStats[key]) dailyStats[key] = 0;
                     dailyStats[key] += amt;
                 }
-                
+
                 // Transaction type breakdown
                 const txnType = t.transactionType_dsc || 'OTHER';
                 if (!transactionTypes[txnType]) transactionTypes[txnType] = { amount: 0, count: 0 };
                 transactionTypes[txnType].amount += amt;
                 transactionTypes[txnType].count++;
             });
-            
+
             // Calculate loads as income
             const loadTxns = travelTxns.filter(t => isLoad(t) && getTxnAmount(t) > 0);
             const filteredLoads = filterByDate(loadTxns, dateRange, 'Txn_Date');
@@ -1445,7 +1446,7 @@ app.get(`${MCP_BASE}/spend/detailed-breakdown`, async (req, res) => {
 app.get(`${MCP_BASE}/spend/by-category`, async (req, res) => {
     try {
         const { period, type } = req.query;
-        
+
         // Validate type parameter
         if (!type || !['transactions', 'travelbuddy'].includes(type)) {
             return res.status(400).json({
@@ -1453,7 +1454,7 @@ app.get(`${MCP_BASE}/spend/by-category`, async (req, res) => {
                 error: "Parameter 'type' is required. Use 'transactions' or 'travelbuddy'."
             });
         }
-        
+
         const dateRange = parsePeriod(period);
         const categoryMap = {};
 
@@ -1544,7 +1545,7 @@ app.get(`${MCP_BASE}/spend/by-category`, async (req, res) => {
 app.get(`${MCP_BASE}/spend/top-merchants`, async (req, res) => {
     try {
         const { period, limit = 10, type } = req.query;
-        
+
         // Validate type parameter
         if (!type || !['transactions', 'travelbuddy'].includes(type)) {
             return res.status(400).json({
@@ -1552,7 +1553,7 @@ app.get(`${MCP_BASE}/spend/top-merchants`, async (req, res) => {
                 error: "Parameter 'type' is required. Use 'transactions' or 'travelbuddy'."
             });
         }
-        
+
         const dateRange = parsePeriod(period);
         const merchantMap = {};
 
@@ -1565,7 +1566,7 @@ app.get(`${MCP_BASE}/spend/top-merchants`, async (req, res) => {
                 let merchant = t.description || t.merchant_name || t.transaction_description || 'Unknown';
                 merchant = String(merchant).trim();
                 if (!merchant || merchant === '') merchant = 'Unknown';
-                
+
                 const amt = Math.abs(getTxnAmount(t));
 
                 if (!merchantMap[merchant]) merchantMap[merchant] = { amount: 0, count: 0 };
@@ -1581,7 +1582,7 @@ app.get(`${MCP_BASE}/spend/top-merchants`, async (req, res) => {
                 let merchant = t.otherPartyName || t.merchant_name || t.description || 'Unknown';
                 merchant = String(merchant).trim();
                 if (!merchant || merchant === '') merchant = 'Unknown';
-                
+
                 const amt = Math.abs(getTxnAmount(t));
 
                 if (!merchantMap[merchant]) merchantMap[merchant] = { amount: 0, count: 0 };
@@ -1817,7 +1818,7 @@ app.get(`${MCP_BASE}/spend/subscriptions`, async (req, res) => {
 app.get(`${MCP_BASE}/spend/daily`, async (req, res) => {
     try {
         const { period, type } = req.query;
-        
+
         // Validate type parameter
         if (!type || !['transactions', 'travelbuddy'].includes(type)) {
             return res.status(400).json({
@@ -1825,7 +1826,7 @@ app.get(`${MCP_BASE}/spend/daily`, async (req, res) => {
                 error: "Parameter 'type' is required. Use 'transactions' or 'travelbuddy'."
             });
         }
-        
+
         const dateRange = parsePeriod(period || 'week'); // Default to week
         const dailyStats = {};
 
@@ -1899,7 +1900,7 @@ app.get(`${MCP_BASE}/spend/category`, async (req, res) => {
     try {
         const { category, period, type } = req.query;
         if (!category) return res.json({ success: false, message: "Category required" });
-        
+
         // Validate type parameter
         if (!type || !['transactions', 'travelbuddy'].includes(type)) {
             return res.status(400).json({
@@ -2033,12 +2034,12 @@ function identifyTrips(travelTxns) {
         // Only look at foreign transactions (country != 'Bahrain')
         // Use 'Country' field (capital C) as that's the actual field name in Excel
         let country = t.Country || t.country || 'Unknown';
-        
+
         // Handle cases where country is an error object (e.g., {_error: "#N/A"})
         if (typeof country === 'object') {
             country = 'Unknown';
         }
-        
+
         // Skip records with Unknown or Bahrain
         if (country === 'Bahrain' || country === 'Unknown' || !country) return;
 
@@ -2098,9 +2099,9 @@ app.get(`${MCP_BASE}/travel/trips`, async (req, res) => {
     try {
         const { period } = req.query;
         const dateRange = parsePeriod(period);
-        
+
         let txns = await getMcpData('travelbuddy');
-        
+
         // Filter by period if specified
         if (dateRange.start || dateRange.end) {
             txns = txns.filter(t => {
@@ -2111,7 +2112,7 @@ app.get(`${MCP_BASE}/travel/trips`, async (req, res) => {
                 return true;
             });
         }
-        
+
         const trips = identifyTrips(txns);
 
         // Return summary list
@@ -2686,7 +2687,7 @@ app.get(`${MCP_BASE}/rewards/summary`, async (req, res) => {
 
         // Get all sheet names from rewards file
         const sheetNames = await getSheetNames(EXCEL_FILES.rewards);
-        
+
         // Map type parameter to sheet name
         const typeToSheet = {
             'transactions': 'Transactions',
@@ -2712,7 +2713,7 @@ app.get(`${MCP_BASE}/rewards/summary`, async (req, res) => {
         // Read and process each sheet
         for (const sheetName of sheetsToRead) {
             let sheetData = await readExcelSheet(EXCEL_FILES.rewards, sheetName);
-            
+
             // Apply date filter if period specified
             if (dateRange.start || dateRange.end) {
                 const dateField = sheetName === 'Flyy points' ? 'Created_At' : 'Txn_Date';
@@ -2724,12 +2725,12 @@ app.get(`${MCP_BASE}/rewards/summary`, async (req, res) => {
                     return true;
                 });
             }
-            
+
             recordCount += sheetData.length;
 
             sheetData.forEach(r => {
                 const sheetKey = sheetName.toLowerCase();
-                
+
                 if (sheetKey.includes('flyy') || sheetKey.includes('points')) {
                     const points = parseAmount(r.Points || 0);
                     totalPoints += points;
@@ -2813,7 +2814,7 @@ app.get(`${MCP_BASE}/rewards/activity`, async (req, res) => {
 
         // Get all sheet names from rewards file
         const sheetNames = await getSheetNames(EXCEL_FILES.rewards);
-        
+
         // Map type parameter to sheet name
         const typeToSheet = {
             'transactions': 'Transactions',
@@ -2844,7 +2845,7 @@ app.get(`${MCP_BASE}/rewards/activity`, async (req, res) => {
         for (const sheetName of sheetsToRead) {
             let sheetData = await readExcelSheet(EXCEL_FILES.rewards, sheetName);
             const sheetKey = sheetName.toLowerCase().replace(/\s+/g, '_');
-            
+
             // Apply date filter
             const dateField = sheetName === 'Flyy points' ? 'Created_At' : 'Txn_Date';
             sheetData = sheetData.filter(item => {
@@ -3173,11 +3174,11 @@ app.get(`${MCP_BASE}/utility/balance`, async (req, res) => {
     try {
         // Get current balance from the latest transaction's available_balance field
         const txns = await getMcpData('transactions');
-        
+
         // Find the latest transaction by date
         let latestTxn = null;
         let latestDate = null;
-        
+
         txns.forEach(t => {
             const dateVal = t.transaction_date_time || t.created_date;
             if (dateVal) {
@@ -3188,7 +3189,7 @@ app.get(`${MCP_BASE}/utility/balance`, async (req, res) => {
                 }
             }
         });
-        
+
         // Get balance from the latest transaction
         let balance = 0;
         if (latestTxn) {
@@ -3915,12 +3916,12 @@ app.get('/api/cache/info', async (req, res) => {
         }
 
         const keys = await redisClient.keys('*');
-        
+
         // Filter to only show our app's keys (exclude system keys)
-        const appKeys = keys.filter(k => 
-            k.startsWith('remittance:') || 
-            k.startsWith('transactions:') || 
-            k.startsWith('rewardhistory:') || 
+        const appKeys = keys.filter(k =>
+            k.startsWith('remittance:') ||
+            k.startsWith('transactions:') ||
+            k.startsWith('rewardhistory:') ||
             k.startsWith('travelbuddy:')
         );
 
@@ -4653,11 +4654,11 @@ app.get('/api/analytics/by-category', async (req, res) => {
         res.json({
             success: true,
             message: "Category breakdown fetched successfully",
-            filters_applied: { 
+            filters_applied: {
                 period: period ? (dateRange ? dateRange.label : period) : null,
-                start_date, 
-                end_date, 
-                source: source || 'rewards' 
+                start_date,
+                end_date,
+                source: source || 'rewards'
             },
             total_categories: sorted.length,
             by_category: sorted
@@ -4800,3 +4801,21 @@ app.get('/api/analytics/card-usage', async (req, res) => {
         res.status(500).json({ success: false, message: "Error fetching card usage analytics", error: error.message });
     }
 });
+
+// ============================================
+// TEST ENDPOINTS - CPR-based User & Transaction APIs
+// ============================================
+
+// Initialize test routes with helper dependencies
+const testRouter = initTestRoutes({
+    EXCEL_FILES,
+    readExcelSheet,
+    getMonthFilter,
+    getMonthName,
+    calculateStats,
+    isDateInMonth,
+    parseDate
+});
+
+// Mount test routes
+app.use('/api/test', testRouter);
