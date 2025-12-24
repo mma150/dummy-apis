@@ -20,6 +20,9 @@ COPY "transactions.xlsx" ./
 COPY "rewardhistory.xlsx" ./
 COPY "travelbuddytxn.xlsx" ./
 
+COPY "users.csv" ./
+COPY "transactions.csv" ./
+
 # Expose port
 EXPOSE 9191
 
