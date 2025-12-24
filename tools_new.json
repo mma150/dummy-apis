@@ -1,8 +1,8 @@
 [
   {
-    "name": "validate_user_by_cpr",
-    "description": "Validate and retrieve user details by CPR (Civil Personal Record) number. Returns complete user profile including personal information, address, occupation, and income. Use this to verify user identity before processing transactions.",
-    "endpoint": "https://dummy-api.omnikit.live/api/test/user-details",
+    "name": "get_user_summary",
+    "description": "Get user profile and financial snapshot including personal details, address, current balance, total income, total expenses, and transaction count. ALWAYS use this FIRST to validate the user and get their name. Returns full_name field which should be used to address the user throughout the conversation.",
+    "endpoint": "https://dummy-api.omnikit.live/api/test/user-summary",
     "method": "GET",
     "inputSchema": {
       "type": "object",
@@ -20,9 +20,9 @@
     "queryParams": ["cpr"]
   },
   {
-    "name": "get_monthly_transaction_summary",
-    "description": "Get aggregated monthly transaction summary for a specific CPR. Returns total credits, debits, net amount, transaction counts, category breakdown, and status breakdown. Use this when user asks for monthly summary, overview, or statistics.",
-    "endpoint": "https://dummy-api.omnikit.live/api/test/monthly-transactions-summary",
+    "name": "get_transactions",
+    "description": "Flexible transaction search with powerful filtering. Returns detailed transaction list with all transaction details. Supports filtering by date range, month/year, type (Credit/Debit), category, payment source, status, and amount range. Use this when user asks for transaction details, lists, or specific filtered transactions.",
+    "endpoint": "https://dummy-api.omnikit.live/api/test/transactions",
     "method": "GET",
     "inputSchema": {
       "type": "object",
@@ -33,86 +33,45 @@
         },
         "month": {
           "type": "integer",
-          "description": "Month number (1-12). Defaults to current month if not specified"
+          "description": "Month number (1-12) for filtering. Use with year parameter."
         },
         "year": {
           "type": "integer",
-          "description": "Year (YYYY format, e.g., 2025). Defaults to current year if not specified"
-        }
-      },
-      "required": ["cpr"]
-    },
-    "headers": {
-      "Content-Type": "application/json"
-    },
-    "queryParams": ["cpr", "month", "year"]
-  },
-  {
-    "name": "get_monthly_transactions_detailed",
-    "description": "Get detailed list of all transactions for a CPR in a specific month. Returns individual transaction records with full details including transaction ID, date, description, type, amount, category, status, and payment source. Supports filtering by transaction type (Credit/Debit) and category.",
-    "endpoint": "https://dummy-api.omnikit.live/api/test/monthly-transactions",
-    "method": "GET",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "cpr": {
+          "description": "Year (YYYY format, e.g., 2025) for filtering"
+        },
+        "startDate": {
           "type": "string",
-          "description": "Required. User's CPR number"
+          "description": "Start date for range filter (YYYY-MM-DD format)"
         },
-        "month": {
-          "type": "integer",
-          "description": "Month number (1-12). Defaults to current month"
-        },
-        "year": {
-          "type": "integer",
-          "description": "Year (YYYY). Defaults to current year"
+        "endDate": {
+          "type": "string",
+          "description": "End date for range filter (YYYY-MM-DD format)"
         },
         "type": {
           "type": "string",
           "enum": ["Credit", "Debit"],
-          "description": "Optional filter by transaction type: 'Credit' for incoming money, 'Debit' for outgoing money"
+          "description": "Filter by transaction type: 'Credit' for income, 'Debit' for expenses"
         },
         "category": {
           "type": "string",
-          "description": "Optional filter by category (e.g., Salary, Shopping, Utilities, Dining, Transport, Entertainment, Health, Housing, Groceries, Transfer)"
-        }
-      },
-      "required": ["cpr"]
-    },
-    "headers": {
-      "Content-Type": "application/json"
-    },
-    "queryParams": ["cpr", "month", "year", "type", "category"]
-  },
-  {
-    "name": "get_all_transactions_by_cpr",
-    "description": "Get all transactions for a specific CPR across all time periods with pagination support. Returns complete transaction history sorted by date (newest first) with summary statistics. Use this when user asks for complete transaction history, all transactions, or transaction list with pagination.",
-    "endpoint": "https://dummy-api.omnikit.live/api/test/all-transactions",
-    "method": "GET",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "cpr": {
+          "description": "Filter by category (partial match). Available: Salary, Shopping, Utilities, Dining, Transport, Entertainment, Health, Housing, Groceries, Transfer"
+        },
+        "paymentSource": {
           "type": "string",
-          "description": "Required. User's CPR number"
-        },
-        "limit": {
-          "type": "integer",
-          "description": "Number of records to return per page (default: 100, max: 100)"
-        },
-        "offset": {
-          "type": "integer",
-          "description": "Number of records to skip for pagination (default: 0). Use offset=0 for first page, offset=100 for second page, etc."
-        },
-        "type": {
-          "type": "string",
-          "enum": ["Credit", "Debit"],
-          "description": "Optional filter by transaction type"
+          "description": "Filter by payment source (partial match). Examples: 'Credit Card', 'Visa Debit', 'Account'"
         },
         "status": {
           "type": "string",
           "enum": ["Completed", "Pending"],
-          "description": "Optional filter by transaction status"
+          "description": "Filter by transaction status"
+        },
+        "minAmount": {
+          "type": "number",
+          "description": "Minimum amount filter (absolute value)"
+        },
+        "maxAmount": {
+          "type": "number",
+          "description": "Maximum amount filter (absolute value)"
         }
       },
       "required": ["cpr"]
@@ -120,6 +79,80 @@
     "headers": {
       "Content-Type": "application/json"
     },
-    "queryParams": ["cpr", "limit", "offset", "type", "status"]
+    "queryParams": ["cpr", "month", "year", "startDate", "endDate", "type", "category", "paymentSource", "status", "minAmount", "maxAmount"]
+  },
+  {
+    "name": "get_analytics",
+    "description": "Get aggregated transaction statistics and breakdowns. Returns period summary (income, expense, net flow), breakdown by category with percentages, and breakdown by payment source. Use this when user asks for summaries, statistics, breakdowns, or 'how much did I spend on X'. Supports same filters as get_transactions.",
+    "endpoint": "https://dummy-api.omnikit.live/api/test/analytics",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cpr": {
+          "type": "string",
+          "description": "Required. User's CPR number"
+        },
+        "month": {
+          "type": "integer",
+          "description": "Month number (1-12) for filtering. Defaults to current month if not specified."
+        },
+        "year": {
+          "type": "integer",
+          "description": "Year (YYYY). Defaults to current year if not specified."
+        },
+        "startDate": {
+          "type": "string",
+          "description": "Start date for range filter (YYYY-MM-DD)"
+        },
+        "endDate": {
+          "type": "string",
+          "description": "End date for range filter (YYYY-MM-DD)"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["Credit", "Debit"],
+          "description": "Filter by transaction type"
+        },
+        "category": {
+          "type": "string",
+          "description": "Filter analytics for specific category only"
+        },
+        "paymentSource": {
+          "type": "string",
+          "description": "Filter analytics for specific payment source"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Completed", "Pending"],
+          "description": "Filter by transaction status"
+        }
+      },
+      "required": ["cpr"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["cpr", "month", "year", "startDate", "endDate", "type", "category", "paymentSource", "status"]
+  },
+  {
+    "name": "get_metadata",
+    "description": "Get available filter options for a user. Returns unique categories, payment sources, and years available in the user's transaction history. Use this to help the AI know what valid filter values exist for this user. Useful for autocomplete or suggesting filter options.",
+    "endpoint": "https://dummy-api.omnikit.live/api/test/metadata",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cpr": {
+          "type": "string",
+          "description": "Required. User's CPR number"
+        }
+      },
+      "required": ["cpr"]
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryParams": ["cpr"]
   }
 ]

@@ -15,89 +15,133 @@ function initTestRoutes(deps) {
 const USERS_CSV = path.join(__dirname, '..', 'users.csv');
 const TRANSACTIONS_CSV = path.join(__dirname, '..', 'transactions.csv');
 
-// Helper function to read CSV file
-function readCSV(filePath) {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const lines = content.trim().split('\n');
-    const headers = lines[0].split(',').map(h => h.trim().replace(/\r/g, ''));
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
 
-    return lines.slice(1).map(line => {
-        const values = line.split(',').map(v => v.trim().replace(/\r/g, ''));
-        const obj = {};
-        headers.forEach((header, index) => {
-            obj[header] = values[index] || null;
+// Helper: Read CSV file with robust parsing
+function readCSV(filePath) {
+    try {
+        if (!fs.existsSync(filePath)) return [];
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const lines = content.trim().split('\n');
+        if (lines.length < 2) return [];
+
+        const headers = lines[0].split(',').map(h => h.trim().replace(/\r/g, ''));
+
+        return lines.slice(1).map(line => {
+            // Handle split, respecting potential quotes (simple regex approach for this dataset)
+            // Note: This dataset seems simple, standard split is likely sufficient, 
+            // but we strip potential extra quotes.
+            const values = line.split(',').map(v => v.trim().replace(/\r/g, ''));
+            const obj = {};
+            headers.forEach((header, index) => {
+                let val = values[index] || '';
+                // Remove surrounding quotes if present
+                if (val.startsWith('"') && val.endsWith('"')) {
+                    val = val.slice(1, -1);
+                }
+                obj[header] = val;
+            });
+            return obj;
         });
-        return obj;
+    } catch (err) {
+        console.error("Error reading CSV:", err);
+        return [];
+    }
+}
+
+// Helper: Parse Amount to Float safely
+function parseAmount(amountStr) {
+    if (!amountStr) return 0;
+    const cleanStr = amountStr.replace(/,/g, '').replace('BHD', '').trim();
+    return parseFloat(cleanStr) || 0;
+}
+
+// Helper: Format number to 3 decimal places
+function formatBHD(num) {
+    return Math.round((num + Number.EPSILON) * 1000) / 1000;
+}
+
+// Helper: Generic Filter Logic
+function filterTransactions(transactions, filters) {
+    return transactions.filter(t => {
+        // 1. CPR Filter (Mandatory usually, but handled by caller)
+        if (filters.cpr && t.CPR !== filters.cpr) return false;
+
+        // 2. Date Range Filter
+        const tDate = new Date(t.Date);
+        if (filters.startDate && tDate < new Date(filters.startDate)) return false;
+        if (filters.endDate && tDate > new Date(filters.endDate)) return false;
+
+        // 3. Month/Year Shortcut
+        if (filters.year) {
+            const year = parseInt(filters.year);
+            if (tDate.getFullYear() !== year) return false;
+            if (filters.month) {
+                const month = parseInt(filters.month);
+                if ((tDate.getMonth() + 1) !== month) return false;
+            }
+        }
+
+        // 4. Type Filter (Credit/Debit) - Case insensitive
+        if (filters.type && t.Type.toLowerCase() !== filters.type.toLowerCase()) return false;
+
+        // 5. Category Filter (Partial Match)
+        if (filters.category && !t.Category.toLowerCase().includes(filters.category.toLowerCase())) return false;
+
+        // 6. Payment Source Filter (Partial Match, e.g. "Credit Card" matches "Credit Card (...9988)")
+        if (filters.paymentSource && !t.Payment_Source.toLowerCase().includes(filters.paymentSource.toLowerCase())) return false;
+
+        // 7. Status Filter
+        if (filters.status && t.Status.toLowerCase() !== filters.status.toLowerCase()) return false;
+
+        // 8. Amount Range (Absolute value comparison)
+        const amt = Math.abs(parseAmount(t.Amount_BHD));
+        if (filters.minAmount && amt < parseFloat(filters.minAmount)) return false;
+        if (filters.maxAmount && amt > parseFloat(filters.maxAmount)) return false;
+
+        return true;
     });
 }
 
-// Helper function to parse date from CSV (YYYY-MM-DD format)
-function parseCSVDate(dateStr) {
-    if (!dateStr) return null;
-    const parts = dateStr.split('-');
-    if (parts.length === 3) {
-        return new Date(parts[0], parseInt(parts[1]) - 1, parts[2]);
-    }
-    return null;
-}
-
-// Helper function to check if date is in specific month/year
-function isDateInMonth(dateStr, month, year) {
-    const date = parseCSVDate(dateStr);
-    if (!date) return false;
-    return date.getMonth() + 1 === parseInt(month) && date.getFullYear() === parseInt(year);
-}
-
 // ============================================
-// 1. GET USER DETAILS BY CPR (Validation)
+// 1. GET USER SUMMARY (Snapshot)
 // ============================================
-
 /**
- * @swagger
- * /api/test/user-details:
- *   get:
- *     summary: Get user details by CPR for validation
- *     tags: [Test APIs]
- *     parameters:
- *       - in: query
- *         name: cpr
- *         required: true
- *         schema: { type: string }
- *         description: User's CPR number
- *     responses:
- *       200:
- *         description: User details
- *       404:
- *         description: User not found
+ * Returns user details + total calculated balance + total income/expense all time.
  */
-router.get('/user-details', async (req, res) => {
+router.get('/user-summary', async (req, res) => {
     try {
+        console.log(`\n--- API CALL: /user-summary ---`);
+        console.log(`Query Params:`, req.query);
+
         const { cpr } = req.query;
+        if (!cpr) return res.status(400).json({ success: false, message: "CPR required" });
 
-        if (!cpr) {
-            return res.status(400).json({
-                success: false,
-                message: "CPR parameter is required"
-            });
-        }
-
-        // Read users from CSV
         const users = readCSV(USERS_CSV);
-
-        // Find user by CPR
         const user = users.find(u => u.CPR === cpr);
 
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: `User with CPR ${cpr} not found`
-            });
-        }
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-        res.json({
+        // Calculate Stats
+        const allTransactions = readCSV(TRANSACTIONS_CSV);
+        const userTransactions = allTransactions.filter(t => t.CPR === cpr);
+
+        let currentBalance = 0;
+        let totalIncome = 0;
+        let totalSpend = 0;
+
+        userTransactions.forEach(t => {
+            const amt = parseAmount(t.Amount_BHD);
+            currentBalance += amt;
+            if (amt > 0) totalIncome += amt;
+            else totalSpend += Math.abs(amt);
+        });
+
+        const responseData = {
             success: true,
-            message: "User details fetched successfully",
-            data: {
+            user: {
                 cpr: user.CPR,
                 full_name: user.FullName,
                 date_of_birth: user.DOB,
@@ -112,386 +156,187 @@ router.get('/user-details', async (req, res) => {
                 },
                 occupation: user.Occupation,
                 income_bhd: parseFloat(user.Income_BHD) || 0
+            },
+            financials: {
+                current_balance: formatBHD(currentBalance),
+                total_income_all_time: formatBHD(totalIncome),
+                total_spend_all_time: formatBHD(totalSpend),
+                transaction_count: userTransactions.length
             }
-        });
+        };
+
+        console.log(`Response Summary: Balance=${responseData.financials.current_balance}, Recs=${responseData.financials.transaction_count}`);
+        res.json(responseData);
+
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: "Error fetching user details",
-            error: error.message
-        });
+        console.error(error);
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 
 // ============================================
-// 2. GET MONTHLY TRANSACTIONS SUMMARY
+// 2. GET TRANSACTIONS (Master Search)
 // ============================================
-
 /**
- * @swagger
- * /api/test/monthly-transactions-summary:
- *   get:
- *     summary: Get monthly transaction summary for a CPR
- *     tags: [Test APIs]
- *     parameters:
- *       - in: query
- *         name: cpr
- *         required: true
- *         schema: { type: string }
- *       - in: query
- *         name: month
- *         schema: { type: integer }
- *         description: Month (1-12), defaults to current month
- *       - in: query
- *         name: year
- *         schema: { type: integer }
- *         description: Year (YYYY), defaults to current year
- *     responses:
- *       200:
- *         description: Monthly transaction summary
+ * The "Swiss Army Knife" endpoint.
+ * Filters: startDate, endDate, month, year, type, category, paymentSource, status, minAmount, maxAmount.
+ * NO PAGINATION - Returns all matching data.
  */
-router.get('/monthly-transactions-summary', async (req, res) => {
+router.get('/transactions', async (req, res) => {
+    try {
+        console.log(`\n--- API CALL: /transactions ---`);
+        console.log(`Query Params:`, req.query);
+
+        const { cpr } = req.query;
+        if (!cpr) return res.status(400).json({ success: false, message: "CPR required" });
+
+        const allTransactions = readCSV(TRANSACTIONS_CSV);
+
+        // Use generic filter
+        const filtered = filterTransactions(allTransactions, req.query);
+
+        // Sort: Newest First
+        filtered.sort((a, b) => b.Date.localeCompare(a.Date));
+
+        // Format for response
+        const formattedData = filtered.map(t => ({
+            id: t.TransactionID,
+            date: t.Date,
+            description: t.Description,
+            category: t.Category,
+            type: t.Type, // Credit / Debit
+            amount: parseAmount(t.Amount_BHD),
+            status: t.Status,
+            payment_source: t.Payment_Source
+        }));
+
+        const totalAmount = formattedData.reduce((sum, t) => sum + t.amount, 0);
+
+        console.log(`Found ${formattedData.length} transactions. Net Total: ${formatBHD(totalAmount)}`);
+
+        res.json({
+            success: true,
+            cpr: cpr,
+            count: formattedData.length,
+            net_total_of_selection: formatBHD(totalAmount),
+            filters_applied: req.query,
+            data: formattedData
+        });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================================
+// 3. GET ANALYTICS (Stats & Breakdowns)
+// ============================================
+/**
+ * Returns aggregated data based on the same filters as /transactions.
+ * Useful for "How much did I spend on Food last month?" or "Spending by Card".
+ */
+router.get('/analytics', async (req, res) => {
+    try {
+        console.log(`\n--- API CALL: /analytics ---`);
+        console.log(`Query Params:`, req.query);
+
+        const { cpr } = req.query;
+        if (!cpr) return res.status(400).json({ success: false, message: "CPR required" });
+
+        const allTransactions = readCSV(TRANSACTIONS_CSV);
+        const filtered = filterTransactions(allTransactions, req.query);
+
+        let income = 0;
+        let expense = 0;
+        const categoryMap = {};
+        const sourceMap = {};
+
+        filtered.forEach(t => {
+            const amt = parseAmount(t.Amount_BHD);
+            const absAmt = Math.abs(amt);
+            const cat = t.Category || 'Uncategorized';
+            const source = t.Payment_Source || 'Unknown';
+
+            if (amt > 0) income += amt;
+            else {
+                expense += absAmt;
+
+                // Track Category Spending (Only for Debits)
+                if (!categoryMap[cat]) categoryMap[cat] = 0;
+                categoryMap[cat] += absAmt;
+
+                // Track Payment Source Usage (Only for Debits usually, but let's track volume)
+                // Actually, let's track Spending by Source
+                if (!sourceMap[source]) sourceMap[source] = 0;
+                sourceMap[source] += absAmt;
+            }
+        });
+
+        // Convert Maps to Arrays
+        const categories = Object.keys(categoryMap).map(k => ({
+            name: k,
+            total: formatBHD(categoryMap[k]),
+            percentage: expense > 0 ? Math.round((categoryMap[k] / expense) * 100) : 0
+        })).sort((a, b) => b.total - a.total);
+
+        const sources = Object.keys(sourceMap).map(k => ({
+            name: k,
+            total: formatBHD(sourceMap[k]),
+            percentage: expense > 0 ? Math.round((sourceMap[k] / expense) * 100) : 0
+        })).sort((a, b) => b.total - a.total);
+
+        const responseData = {
+            success: true,
+            cpr: cpr,
+            period_summary: {
+                total_income: formatBHD(income),
+                total_expense: formatBHD(expense),
+                net_flow: formatBHD(income - expense),
+                transaction_count: filtered.length
+            },
+            breakdown_by_category: categories,
+            breakdown_by_payment_source: sources
+        };
+
+        console.log(`Analytics Generated: Income=${responseData.period_summary.total_income}, Expense=${responseData.period_summary.total_expense}`);
+        res.json(responseData);
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================================
+// 4. GET METADATA (Autocomplete Helpers)
+// ============================================
+/**
+ * Returns unique Categories and Payment Sources available for this user.
+ * Helps the AI know what strings to query.
+ */
+router.get('/metadata', async (req, res) => {
     try {
         const { cpr } = req.query;
-        const now = new Date();
-        const month = req.query.month ? parseInt(req.query.month) : now.getMonth() + 1;
-        const year = req.query.year ? parseInt(req.query.year) : now.getFullYear();
+        if (!cpr) return res.status(400).json({ success: false, message: "CPR required" });
 
-        if (!cpr) {
-            return res.status(400).json({
-                success: false,
-                message: "CPR parameter is required"
-            });
-        }
-
-        // Read transactions from CSV
         const allTransactions = readCSV(TRANSACTIONS_CSV);
+        const userTransactions = allTransactions.filter(t => t.CPR === cpr);
 
-        // Filter by CPR and month/year
-        const transactions = allTransactions.filter(t =>
-            t.CPR === cpr && isDateInMonth(t.Date, month, year)
-        );
-
-        if (transactions.length === 0) {
-            return res.json({
-                success: true,
-                message: "No transactions found for the specified period",
-                cpr: cpr,
-                period: `${month}/${year}`,
-                summary: {
-                    total_transactions: 0,
-                    total_credits: 0,
-                    total_debits: 0,
-                    net_amount: 0,
-                    credit_count: 0,
-                    debit_count: 0
-                }
-            });
-        }
-
-        // Calculate summary
-        let totalCredits = 0;
-        let totalDebits = 0;
-        let creditCount = 0;
-        let debitCount = 0;
-        const categoryBreakdown = {};
-        const statusBreakdown = {};
-
-        transactions.forEach(t => {
-            const amount = parseFloat(t.Amount_BHD) || 0;
-            const type = t.Type;
-            const category = t.Category || 'Uncategorized';
-            const status = t.Status || 'Unknown';
-
-            if (type === 'Credit') {
-                totalCredits += amount;
-                creditCount++;
-            } else if (type === 'Debit') {
-                totalDebits += Math.abs(amount);
-                debitCount++;
-            }
-
-            // Category breakdown
-            if (!categoryBreakdown[category]) {
-                categoryBreakdown[category] = { amount: 0, count: 0 };
-            }
-            categoryBreakdown[category].amount += Math.abs(amount);
-            categoryBreakdown[category].count++;
-
-            // Status breakdown
-            if (!statusBreakdown[status]) {
-                statusBreakdown[status] = 0;
-            }
-            statusBreakdown[status]++;
-        });
-
-        // Format category breakdown
-        const categories = Object.entries(categoryBreakdown)
-            .map(([name, data]) => ({
-                category: name,
-                total_amount: Math.round(data.amount * 1000) / 1000,
-                transaction_count: data.count
-            }))
-            .sort((a, b) => b.total_amount - a.total_amount);
+        const uniqueCategories = [...new Set(userTransactions.map(t => t.Category))].filter(Boolean).sort();
+        const uniqueSources = [...new Set(userTransactions.map(t => t.Payment_Source))].filter(Boolean).sort();
+        const years = [...new Set(userTransactions.map(t => t.Date.substring(0, 4)))].sort();
 
         res.json({
             success: true,
-            message: "Monthly transaction summary fetched successfully",
-            cpr: cpr,
-            period: `${month}/${year}`,
-            summary: {
-                total_transactions: transactions.length,
-                total_credits: Math.round(totalCredits * 1000) / 1000,
-                total_debits: Math.round(totalDebits * 1000) / 1000,
-                net_amount: Math.round((totalCredits - totalDebits) * 1000) / 1000,
-                credit_count: creditCount,
-                debit_count: debitCount,
-                by_category: categories,
-                by_status: statusBreakdown
+            available_data: {
+                years: years,
+                categories: uniqueCategories,
+                payment_sources: uniqueSources
             }
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: "Error fetching monthly transaction summary",
-            error: error.message
-        });
-    }
-});
-
-// ============================================
-// 3. GET MONTHLY TRANSACTIONS DETAILED
-// ============================================
-
-/**
- * @swagger
- * /api/test/monthly-transactions:
- *   get:
- *     summary: Get detailed monthly transactions for a CPR
- *     tags: [Test APIs]
- *     parameters:
- *       - in: query
- *         name: cpr
- *         required: true
- *         schema: { type: string }
- *       - in: query
- *         name: month
- *         schema: { type: integer }
- *       - in: query
- *         name: year
- *         schema: { type: integer }
- *       - in: query
- *         name: type
- *         schema: { type: string }
- *         description: Filter by type (Credit/Debit)
- *       - in: query
- *         name: category
- *         schema: { type: string }
- *         description: Filter by category
- *     responses:
- *       200:
- *         description: Detailed monthly transactions
- */
-router.get('/monthly-transactions', async (req, res) => {
-    try {
-        const { cpr, type, category } = req.query;
-        const now = new Date();
-        const month = req.query.month ? parseInt(req.query.month) : now.getMonth() + 1;
-        const year = req.query.year ? parseInt(req.query.year) : now.getFullYear();
-
-        if (!cpr) {
-            return res.status(400).json({
-                success: false,
-                message: "CPR parameter is required"
-            });
-        }
-
-        // Read transactions from CSV
-        const allTransactions = readCSV(TRANSACTIONS_CSV);
-
-        // Filter by CPR and month/year
-        let transactions = allTransactions.filter(t =>
-            t.CPR === cpr && isDateInMonth(t.Date, month, year)
-        );
-
-        // Apply additional filters
-        if (type) {
-            transactions = transactions.filter(t =>
-                t.Type && t.Type.toLowerCase() === type.toLowerCase()
-            );
-        }
-
-        if (category) {
-            transactions = transactions.filter(t =>
-                t.Category && t.Category.toLowerCase().includes(category.toLowerCase())
-            );
-        }
-
-        // Format transactions
-        const formattedTransactions = transactions.map(t => ({
-            transaction_id: t.TransactionID,
-            date: t.Date,
-            description: t.Description,
-            type: t.Type,
-            amount_bhd: parseFloat(t.Amount_BHD) || 0,
-            category: t.Category,
-            status: t.Status,
-            payment_source: t.Payment_Source
-        }));
-
-        // Calculate totals
-        const totalAmount = formattedTransactions.reduce((sum, t) =>
-            sum + Math.abs(t.amount_bhd), 0
-        );
-
-        res.json({
-            success: true,
-            message: "Monthly transactions fetched successfully",
-            cpr: cpr,
-            period: `${month}/${year}`,
-            filters_applied: {
-                type: type || 'All',
-                category: category || 'All'
-            },
-            total_records: formattedTransactions.length,
-            total_amount: Math.round(totalAmount * 1000) / 1000,
-            data: formattedTransactions
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: "Error fetching monthly transactions",
-            error: error.message
-        });
-    }
-});
-
-// ============================================
-// 4. GET ALL TRANSACTIONS BY CPR
-// ============================================
-
-/**
- * @swagger
- * /api/test/all-transactions:
- *   get:
- *     summary: Get all transactions for a CPR
- *     tags: [Test APIs]
- *     parameters:
- *       - in: query
- *         name: cpr
- *         required: true
- *         schema: { type: string }
- *       - in: query
- *         name: limit
- *         schema: { type: integer }
- *         description: Number of records to return
- *       - in: query
- *         name: offset
- *         schema: { type: integer }
- *         description: Pagination offset
- *       - in: query
- *         name: type
- *         schema: { type: string }
- *         description: Filter by type (Credit/Debit)
- *       - in: query
- *         name: status
- *         schema: { type: string }
- *         description: Filter by status
- *     responses:
- *       200:
- *         description: All transactions for the CPR
- */
-router.get('/all-transactions', async (req, res) => {
-    try {
-        const { cpr, type, status } = req.query;
-        const limit = req.query.limit ? parseInt(req.query.limit) : 100;
-        const offset = req.query.offset ? parseInt(req.query.offset) : 0;
-
-        if (!cpr) {
-            return res.status(400).json({
-                success: false,
-                message: "CPR parameter is required"
-            });
-        }
-
-        // Read transactions from CSV
-        const allTransactions = readCSV(TRANSACTIONS_CSV);
-
-        // Filter by CPR
-        let transactions = allTransactions.filter(t => t.CPR === cpr);
-
-        // Apply additional filters
-        if (type) {
-            transactions = transactions.filter(t =>
-                t.Type && t.Type.toLowerCase() === type.toLowerCase()
-            );
-        }
-
-        if (status) {
-            transactions = transactions.filter(t =>
-                t.Status && t.Status.toLowerCase() === status.toLowerCase()
-            );
-        }
-
-        // Sort by date (newest first)
-        transactions.sort((a, b) => {
-            const dateA = parseCSVDate(a.Date);
-            const dateB = parseCSVDate(b.Date);
-            return dateB - dateA;
-        });
-
-        const totalRecords = transactions.length;
-
-        // Apply pagination
-        const paginatedTransactions = transactions.slice(offset, offset + limit);
-
-        // Format transactions
-        const formattedTransactions = paginatedTransactions.map(t => ({
-            transaction_id: t.TransactionID,
-            date: t.Date,
-            description: t.Description,
-            type: t.Type,
-            amount_bhd: parseFloat(t.Amount_BHD) || 0,
-            category: t.Category,
-            status: t.Status,
-            payment_source: t.Payment_Source
-        }));
-
-        // Calculate summary statistics
-        const credits = transactions.filter(t => t.Type === 'Credit');
-        const debits = transactions.filter(t => t.Type === 'Debit');
-        const totalCredits = credits.reduce((sum, t) => sum + (parseFloat(t.Amount_BHD) || 0), 0);
-        const totalDebits = debits.reduce((sum, t) => sum + Math.abs(parseFloat(t.Amount_BHD) || 0), 0);
-
-        res.json({
-            success: true,
-            message: "All transactions fetched successfully",
-            cpr: cpr,
-            filters_applied: {
-                type: type || 'All',
-                status: status || 'All'
-            },
-            pagination: {
-                total_records: totalRecords,
-                limit: limit,
-                offset: offset,
-                showing: formattedTransactions.length
-            },
-            summary: {
-                total_credits: Math.round(totalCredits * 1000) / 1000,
-                total_debits: Math.round(totalDebits * 1000) / 1000,
-                net_amount: Math.round((totalCredits - totalDebits) * 1000) / 1000,
-                credit_count: credits.length,
-                debit_count: debits.length
-            },
-            data: formattedTransactions
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: "Error fetching all transactions",
-            error: error.message
-        });
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 
