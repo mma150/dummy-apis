@@ -84,6 +84,9 @@ router.get('/user-details', async (req, res) => {
         // Read users from CSV
         const users = readCSV(USERS_CSV);
 
+        console.log(`Searching for user with CPR: ${cpr}`);
+        console.log(users);
+
         // Find user by CPR
         const user = users.find(u => u.CPR === cpr);
 
@@ -115,6 +118,7 @@ router.get('/user-details', async (req, res) => {
             }
         });
     } catch (error) {
+        console.log(error);
         res.status(500).json({
             success: false,
             message: "Error fetching user details",
